@@ -55,6 +55,9 @@
 #define HYMO_KSU_ALLOWLIST_PATH     "/data/adb/ksu/.allowlist"
 #define HYMO_KSU_ALLOWLIST_MAGIC    0x7f4b5355
 #define HYMO_KSU_ALLOWLIST_VERSION  3
+/* KSU file format version (header) and per-profile version, mirrors upstream */
+#define HYMO_KSU_FILE_FORMAT_VERSION 3
+#define HYMO_KSU_APP_PROFILE_VER     2
 #define HYMO_KSU_MAX_PACKAGE_NAME   256
 #define HYMO_KSU_MAX_GROUPS         32
 #define HYMO_KSU_SELINUX_DOMAIN     64
@@ -158,7 +161,7 @@ struct hymo_non_root_profile {
 struct hymo_app_profile {
 	u32 version;
 	char key[HYMO_KSU_MAX_PACKAGE_NAME];
-	s32 current_uid;
+	s32 curr_uid;
 	bool allow_su;
 	union {
 		struct {

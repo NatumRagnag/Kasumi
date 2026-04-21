@@ -268,6 +268,15 @@ static bool hymo_allowlist_loaded;
 typedef bool (*hymo_ksu_is_allow_uid_fn)(uid_t uid);
 static hymo_ksu_is_allow_uid_fn hymo_ksu_is_allow_uid_ptr;
 
+/*
+ * Primary gate: ksu_uid_should_umount(uid_t) — returns true when the app is
+ * marked for module unmount (i.e., should see spoofed/hidden view). This is
+ * semantically aligned with our hide intent and immune to the field/layout
+ * refactor (curr_uid, hashtable, kref). EXPORT_SYMBOL'd in YukiSU.
+ */
+typedef bool (*hymo_ksu_uid_should_umount_fn)(uid_t uid);
+static hymo_ksu_uid_should_umount_fn hymo_ksu_uid_should_umount_ptr;
+
 /* hymofs_enabled declared above (used by hooks) */
 bool hymo_debug_enabled;
 static bool hymo_stealth_enabled = true;
@@ -1097,30 +1106,27 @@ bool hymo_should_apply_hide_rules(void)
 {
 	uid_t uid = __kuid_val(current_uid());
 
-	/* uid 0 (root) always sees hidden - bypasses is_ksu_domain edge cases */
+	/* uid 0 (root) never sees spoofed view */
 	if (unlikely(uid == 0))
 		return false;
 
-	/* Prefer real-time KSU check when available (always up-to-date with allowlist) */
-	if (hymo_ksu_is_allow_uid_ptr)
-		return !hymo_ksu_is_allow_uid_ptr(uid);
+	/*
+	 * Primary: semantically-correct kernel symbol "should this uid be
+	 * module-unmounted", which matches our hide intent exactly.
+	 */
+	if (hymo_ksu_uid_should_umount_ptr)
+		return hymo_ksu_uid_should_umount_ptr(uid);
 
-	/* Fallback: cached list from ksu_get_allow_list or file */
+	/*
+	 * Fallback: cached allowlist (populated from ksu_get_allow_list(allow=false)
+	 * or from parsing /data/adb/ksu/.allowlist). Presence in this set means
+	 * the uid is explicitly marked non-su in the KSU allowlist — treated as
+	 * "should apply hide". If we never loaded the list, conservatively do
+	 * NOT hide (avoid wrongly hiding root flow).
+	 */
 	if (!hymo_allowlist_loaded)
-		return true;
-	if (xa_empty(&hymo_allow_uids_xa))
-		return true;
-	return !hymo_uid_in_allowlist(uid);
-}
-
-/* Simplified KSU allowlist reload */
-static bool hymo_should_umount_profile(const struct hymo_app_profile *p)
-{
-	if (p->allow_su)
 		return false;
-	if (p->nrp_config.use_default)
-		return true;
-	return p->nrp_config.profile.umount_modules;
+	return hymo_uid_in_allowlist(uid);
 }
 
 static void hymo_add_allow_uid(uid_t uid)
@@ -1146,6 +1152,14 @@ typedef bool (*hymo_ksu_get_allow_list_fn)(int *array, u16 length, u16 *out_leng
 					   u16 *out_total, bool allow);
 static hymo_ksu_get_allow_list_fn hymo_ksu_get_allow_list_ptr;
 
+/*
+ * Reload the KSU allowlist cache. Tries three paths in order:
+ *   1. ksu_uid_should_umount symbol — authoritative, no caching needed.
+ *   2. ksu_get_allow_list(allow=false) — explicitly non-su allowlist entries
+ *      (= apps marked for module unmount), cached into xarray.
+ *   3. Parse /data/adb/ksu/.allowlist on disk with strict version gates.
+ * Path 1 shortcuts: hymo_should_apply_hide_rules will call the symbol directly.
+ */
 static HYMO_NOCFI bool hymo_reload_ksu_allowlist(void)
 {
 	struct file *fp;
@@ -1158,31 +1172,37 @@ static HYMO_NOCFI bool hymo_reload_ksu_allowlist(void)
 	if (!mutex_trylock(&hymo_config_mutex))
 		return false;
 
-	/* Prefer __ksu_is_allow_uid_for_current (handles uid 0 via is_ksu_domain) over __ksu_is_allow_uid */
+	/* Resolve symbols lazily (KSU may load after us). */
+	if (!hymo_ksu_uid_should_umount_ptr && hymofs_kallsyms_lookup_name) {
+		unsigned long addr = hymofs_kallsyms_lookup_name("ksu_uid_should_umount");
+		if (addr && hymofs_valid_kernel_addr(addr))
+			hymo_ksu_uid_should_umount_ptr = (hymo_ksu_uid_should_umount_fn)addr;
+	}
 	if (!hymo_ksu_is_allow_uid_ptr && hymofs_kallsyms_lookup_name) {
 		unsigned long addr = hymofs_kallsyms_lookup_name("__ksu_is_allow_uid_for_current");
-		if (addr && hymofs_valid_kernel_addr(addr)) {
+		if (addr && hymofs_valid_kernel_addr(addr))
 			hymo_ksu_is_allow_uid_ptr = (hymo_ksu_is_allow_uid_fn)addr;
-		}
 	}
 	if (!hymo_ksu_is_allow_uid_ptr && hymofs_kallsyms_lookup_name) {
 		unsigned long addr = hymofs_kallsyms_lookup_name("__ksu_is_allow_uid");
-		if (addr && hymofs_valid_kernel_addr(addr)) {
+		if (addr && hymofs_valid_kernel_addr(addr))
 			hymo_ksu_is_allow_uid_ptr = (hymo_ksu_is_allow_uid_fn)addr;
-		}
 	}
-	if (hymofs_kallsyms_lookup_name && !hymo_ksu_get_allow_list_ptr) {
+	if (!hymo_ksu_get_allow_list_ptr && hymofs_kallsyms_lookup_name) {
 		unsigned long addr = hymofs_kallsyms_lookup_name("ksu_get_allow_list");
 		if (addr && hymofs_valid_kernel_addr(addr))
 			hymo_ksu_get_allow_list_ptr = (hymo_ksu_get_allow_list_fn)addr;
 	}
-	/* When KSU allowlist API available, use it for real-time check; skip cached list */
-	if (hymo_ksu_is_allow_uid_ptr) {
+
+	/* Path 1: primary symbol resolved — no cache needed, gate is real-time. */
+	if (hymo_ksu_uid_should_umount_ptr) {
 		xa_destroy(&hymo_allow_uids_xa);
 		hymo_allowlist_loaded = true;
 		mutex_unlock(&hymo_config_mutex);
 		return true;
 	}
+
+	/* Path 2: bulk API — cache "non-su allowlist entries" (= umount-marked apps). */
 	if (hymo_ksu_get_allow_list_ptr) {
 		int *arr = kmalloc(HYMO_ALLOWLIST_UID_MAX * sizeof(int), GFP_KERNEL);
 
@@ -1190,7 +1210,7 @@ static HYMO_NOCFI bool hymo_reload_ksu_allowlist(void)
 			u16 out_len = 0, out_total = 0;
 			bool ok = hymo_ksu_get_allow_list_ptr(arr,
 							     (u16)HYMO_ALLOWLIST_UID_MAX,
-							     &out_len, &out_total, true);
+							     &out_len, &out_total, false);
 
 			if (ok) {
 				xa_destroy(&hymo_allow_uids_xa);
@@ -1209,7 +1229,7 @@ static HYMO_NOCFI bool hymo_reload_ksu_allowlist(void)
 		}
 	}
 
-	/* Fallback: read allowlist from file (VFS symbols required) */
+	/* Path 3: parse /data/adb/ksu/.allowlist directly. */
 	if (!hymo_filp_open || !hymo_kernel_read) {
 		mutex_unlock(&hymo_config_mutex);
 		return false;
@@ -1227,16 +1247,25 @@ static HYMO_NOCFI bool hymo_reload_ksu_allowlist(void)
 	if (ret != sizeof(magic) || magic != HYMO_KSU_ALLOWLIST_MAGIC)
 		goto bad;
 	ret = hymo_kernel_read(fp, &version, sizeof(version), &off);
-	if (ret != sizeof(version))
+	if (ret != sizeof(version) || version != HYMO_KSU_FILE_FORMAT_VERSION) {
+		pr_warn("HymoFS: allowlist file version mismatch (got %u, expect %u)\n",
+			version, HYMO_KSU_FILE_FORMAT_VERSION);
 		goto bad;
+	}
 
-	hymo_log("allowlist version %u\n", version);
 	xa_destroy(&hymo_allow_uids_xa);
 	hymo_allowlist_loaded = true;
 
 	while (hymo_kernel_read(fp, &profile, sizeof(profile), &off) == sizeof(profile)) {
-		if (!hymo_should_umount_profile(&profile) && profile.current_uid > 0) {
-			hymo_add_allow_uid((uid_t)profile.current_uid);
+		/* Skip mismatched per-profile versions: layout may differ. */
+		if (profile.version != HYMO_KSU_APP_PROFILE_VER)
+			continue;
+		/* Match upstream ksu_uid_should_umount semantic: marked non-su and
+		 * either use_default (assumed true — user explicit add) or umount_modules. */
+		if (!profile.allow_su && profile.curr_uid > 0 &&
+		    (profile.nrp_config.use_default ||
+		     profile.nrp_config.profile.umount_modules)) {
+			hymo_add_allow_uid((uid_t)profile.curr_uid);
 			if (++count >= HYMO_ALLOWLIST_UID_MAX) {
 				hymo_log("allowlist truncated at %d\n", count);
 				break;
@@ -4725,7 +4754,13 @@ static int __init hymofs_lkm_init(void)
 	/* d_real_inode is inline in kernel; we use hymo_d_real_inode_impl via d_op->d_real */
 	if (!hymo_filp_open || !hymo_kernel_read)
 		pr_warn("HymoFS: filp_open/kernel_read not found, allowlist disabled\n");
-	/* Prefer __ksu_is_allow_uid_for_current (handles uid 0) over __ksu_is_allow_uid */
+	/* Primary: ksu_uid_should_umount (semantically correct hide gate). */
+	{
+		unsigned long addr = hymofs_lookup_name("ksu_uid_should_umount");
+		if (addr && hymofs_valid_kernel_addr(addr))
+			hymo_ksu_uid_should_umount_ptr = (hymo_ksu_uid_should_umount_fn)addr;
+	}
+	/* Secondary: __ksu_is_allow_uid_for_current / __ksu_is_allow_uid (legacy). */
 	{
 		unsigned long addr = hymofs_lookup_name("__ksu_is_allow_uid_for_current");
 		if (addr && hymofs_valid_kernel_addr(addr)) {
