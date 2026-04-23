@@ -1,15 +1,13 @@
-// SPDX-License-Identifier: Apache-2.0 OR GPL-2.0
+/* SPDX-License-Identifier: Apache-2.0 OR GPL-2.0 */
 /*
- * HymoFS - lookup-time inode_operations override.
- *
- * See hymofs_iop_override.h for design notes.
+ * HymoFS - lookup-time inode_operations shadow installation for fast getattr spoofing.
  *
  * License: Author's work under Apache-2.0; when used as a kernel module
  * (or linked with the Linux kernel), GPL-2.0 applies for kernel compatibility.
  *
  * Author: Anatdx
  */
-#include "hymofs_lkm.h"
+#include "hymofs_entrypoints.h"
 #include "hymofs_iop_override.h"
 
 #include <linux/fs.h>

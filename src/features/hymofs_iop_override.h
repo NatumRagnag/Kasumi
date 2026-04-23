@@ -1,20 +1,11 @@
 /* SPDX-License-Identifier: Apache-2.0 OR GPL-2.0 */
 /*
- * HymoFS - lookup-time inode_operations override.
+ * HymoFS - interfaces for lookup-time inode_operations shadow overrides.
  *
- * Strategy: install a per-inode shadow inode_operations table that wraps
- * .getattr to apply kstat spoofing inline (indirect call instead of kprobe
- * trap). After install, vfs_getattr -> inode->i_op->getattr runs our shadow
- * directly with no probe overhead.
+ * License: Author's work under Apache-2.0; when used as a kernel module
+ * (or linked with the Linux kernel), GPL-2.0 applies for kernel compatibility.
  *
- * The pointer inode->i_op IS writable (only the pointed-to ops table itself is
- * declared const), so no read-only memory tricks are required.
- *
- * Lifecycle:
- *   - install:    called when an inode is first identified as a redirect
- *                 target (currently from the existing vfs_getattr kretprobe
- *                 ret handler; future: from a d_splice_alias hook).
- *   - uninstall:  triggered automatically by kprobe on __destroy_inode.
+ * Author: Anatdx
  */
 #ifndef _HYMOFS_IOP_OVERRIDE_H
 #define _HYMOFS_IOP_OVERRIDE_H

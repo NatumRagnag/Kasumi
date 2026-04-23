@@ -1,17 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0
+/* SPDX-License-Identifier: Apache-2.0 OR GPL-2.0 */
 /*
- * HymoFS uname spoofing.
+ * HymoFS - global and scoped uname spoofing support.
  *
- * Two modes, both operate directly on `struct new_utsname` memory so every
- * in-kernel consumer (uname(2), /proc/version, /proc/sys/kernel/{ostype,
- * osrelease,version,domainname}, sysinfo, ...) sees the fake values without
- * any per-call hook. This replaces the old kretprobe-on-newuname design.
+ * License: Author's work under Apache-2.0; when used as a kernel module
+ * (or linked with the Linux kernel), GPL-2.0 applies for kernel compatibility.
  *
- *   Global  — overwrite init_uts_ns.name. Affects every task that still
- *             shares init_uts_ns (almost all of Android userspace).
- *   Scoped  — unshare CLONE_NEWUTS for a target task on first trigger,
- *             then write fake fields into its private uts_ns. Only that
- *             task (and its children via inherit) see spoofed values.
+ * Author: Anatdx
  */
 
 #include <linux/kernel.h>
@@ -30,7 +24,7 @@
 #include <linux/user_namespace.h>
 #include <linux/version.h>
 
-#include "hymofs_lkm.h"
+#include "hymofs_entrypoints.h"
 #include "hymofs_uname.h"
 
 /* ------------------------------------------------------------------

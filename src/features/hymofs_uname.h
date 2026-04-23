@@ -1,9 +1,17 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: Apache-2.0 OR GPL-2.0 */
+/*
+ * HymoFS - interfaces for global and scoped uname spoofing.
+ *
+ * License: Author's work under Apache-2.0; when used as a kernel module
+ * (or linked with the Linux kernel), GPL-2.0 applies for kernel compatibility.
+ *
+ * Author: Anatdx
+ */
 #ifndef _HYMOFS_UNAME_H
 #define _HYMOFS_UNAME_H
 
 #include <linux/types.h>
-#include "hymo_magic.h"
+#include "hymofs_uapi.h"
 
 struct task_struct;
 

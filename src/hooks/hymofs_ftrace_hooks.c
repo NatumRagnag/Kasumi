@@ -1,10 +1,6 @@
-// SPDX-License-Identifier: Apache-2.0 OR GPL-2.0
+/* SPDX-License-Identifier: Apache-2.0 OR GPL-2.0 */
 /*
- * HymoFS LKM - ftrace-based VFS entry hooks.
- *
- * Uses ftrace for entry + kretprobe for exit on vfs_getattr, d_path,
- * iterate_dir, vfs_getxattr. Resolve: 1) __symbol_get, 2) hymofs_lookup_name,
- * 3) fallback to kprobes.
+ * HymoFS - ftrace-backed VFS entry hooks and kretprobe bridge support.
  *
  * License: Author's work under Apache-2.0; when used as a kernel module
  * (or linked with the Linux kernel), GPL-2.0 applies for kernel compatibility.
@@ -26,8 +22,9 @@
 #include <linux/smp.h>
 #include <linux/vmalloc.h>
 #include <linux/ftrace.h>
-#include "hymofs_lkm.h"
-#include "hymofs_ftrace.h"
+
+#include "hymofs_entrypoints.h"
+#include "hymofs_ftrace_hooks.h"
 
 #define HYMO_FTRACE_SLOT_DEPTH 16
 
@@ -92,7 +89,7 @@ static inline struct kretprobe_instance *hymo_fake_ri_init(unsigned char *buf, v
 	return ri;
 }
 
-/* Forward declarations: handlers implemented in hymofs_core.c */
+/* Forward declarations: handlers implemented by feature modules. */
 extern int hymo_krp_vfs_getattr_entry(struct kretprobe_instance *ri, struct pt_regs *regs);
 extern int hymo_krp_vfs_getattr_ret(struct kretprobe_instance *ri, struct pt_regs *regs);
 extern int hymo_krp_d_path_entry(struct kretprobe_instance *ri, struct pt_regs *regs);

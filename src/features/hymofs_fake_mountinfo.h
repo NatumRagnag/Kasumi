@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 OR GPL-2.0 */
 /*
- * HymoFS Fake Mountinfo header.
+ * HymoFS - interfaces for fake mountinfo cache generation and serving.
  *
  * License: Author's work under Apache-2.0; when used as a kernel module
  * (or linked with the Linux kernel), GPL-2.0 applies for kernel compatibility.

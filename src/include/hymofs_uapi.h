@@ -7,8 +7,8 @@
  *
  * Author: Anatdx
  */
-#ifndef _LINUX_HYMO_MAGIC_H
-#define _LINUX_HYMO_MAGIC_H
+#ifndef _HYMOFS_UAPI_H
+#define _HYMOFS_UAPI_H
 
 #ifdef __KERNEL__
 #include <linux/ioctl.h>
@@ -208,4 +208,4 @@ struct hymo_statfs_spoof_arg {
  */
 #define HYMO_IOC_SET_UNAME_GLOBAL  _IOW(HYMO_IOC_MAGIC, 28, struct hymo_spoof_uname)
 
-#endif /* _LINUX_HYMO_MAGIC_H */
+#endif /* _HYMOFS_UAPI_H */

@@ -1,30 +1,14 @@
 /* SPDX-License-Identifier: Apache-2.0 OR GPL-2.0 */
 /*
- * HymoFS Fake Mountinfo - per-marked-app precomputed mountinfo snapshot.
+ * HymoFS - fake mountinfo cache generation and serving for hidden-app views.
  *
- * Defeats "mount gap" detection by serving a cached view where:
- *   1) all mounts whose mnt_devname == "KSU" are removed (matches KSU's own
- *      per-ns umount target selection)
- *   2) mnt_id and parent_id are renumbered to form a contiguous sequence, so
- *      the gap left by removed KSU mounts is invisible.
- *   3) propagation group ids in optional fields (shared/master/
- *      propagate_from) are renumbered too, closing the "peer group gap"
- *      heuristic used by preload detectors.
- *
- * Generation strategy: read /proc/self/mountinfo for the current hidden task
- * kernel-internally (using a task-local reentrancy guard so the read hook
- * does not recurse), parse, drop KSU-sourced lines if any remain, renumber
- * ids, cache result. Read path is pure
- * copy_to_user from cache + per-file cursor — no per-read parsing, so no
- * side-channel latency difference vs a kernel-native seq_read.
- * 
  * License: Author's work under Apache-2.0; when used as a kernel module
  * (or linked with the Linux kernel), GPL-2.0 applies for kernel compatibility.
  *
  * Author: Anatdx
  */
 #include "hymofs_fake_mountinfo.h"
-#include "hymofs_lkm.h"
+#include "hymofs_entrypoints.h"
 
 #include <linux/fs.h>
 #include <linux/file.h>

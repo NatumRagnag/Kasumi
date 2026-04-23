@@ -1,19 +1,20 @@
 /* SPDX-License-Identifier: Apache-2.0 OR GPL-2.0 */
 /*
- * HymoFS LKM - ftrace VFS hooks interface.
+ * HymoFS - ftrace-backed VFS hook interfaces and kretprobe bridge helpers.
  *
  * License: Author's work under Apache-2.0; when used as a kernel module
  * (or linked with the Linux kernel), GPL-2.0 applies for kernel compatibility.
  *
  * Author: Anatdx
  */
-#ifndef _HYMOFS_FTRACE_H
-#define _HYMOFS_FTRACE_H
+#ifndef _HYMOFS_FTRACE_HOOKS_H
+#define _HYMOFS_FTRACE_HOOKS_H
 
 #include <linux/types.h>
 #include <linux/errno.h>
-#include <linux/kprobes.h>
-#include <asm/ptrace.h>
+
+struct kretprobe_instance;
+struct pt_regs;
 
 #ifdef CONFIG_DYNAMIC_FTRACE
 
@@ -58,4 +59,4 @@ static inline int hymo_ftrace_krp_ret(struct kretprobe_instance *ri, struct pt_r
 
 #endif /* CONFIG_DYNAMIC_FTRACE */
 
-#endif /* _HYMOFS_FTRACE_H */
+#endif /* _HYMOFS_FTRACE_HOOKS_H */
