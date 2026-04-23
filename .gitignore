@@ -62,3 +62,4 @@ patch_workspace/
 scripts/.hymobot_session
 
 .ddk-version
+compile_commands.json

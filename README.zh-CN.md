@@ -10,7 +10,7 @@ English version： [README.md](./README.md)
 
 - 仓库形态：LKM（不是 in-tree 内核补丁）
 - 主代码目录：`src/`
-- 协议定义：`src/hymo_magic.h`
+- 协议定义：`src/include/hymofs_uapi.h`
 - 当前协议版本：`HYMO_PROTOCOL_VERSION = 14`，(api15 正在开发中)
 - Hook 策略：优先 ftrace/tracepoint，不可用时回退 kprobe/kretprobe
 - 已包含 `arch_ftrace_get_regs` 在 6.6+ 的兼容处理
@@ -78,7 +78,7 @@ insmod hymofs_lkm.ko
 ksud insmod hymofs_lkm.ko
 ```
 
-常用参数（定义于 `src/hymofs_core.c`）：
+常用参数（定义于 `src/core/hymofs_module.c`）：
 
 - `hymo_syscall_nr`
 - `hymo_no_tracepoint=1`
@@ -93,7 +93,7 @@ ksud insmod hymofs_lkm.ko
 1. 用户态通过 GET_FD 获取匿名 fd（仅 root）。
 2. 对该 fd 发送 `ioctl` 管理规则与特性。
 
-常用 ioctl（完整 ABI 见 `src/hymo_magic.h`）：
+常用 ioctl（完整 ABI 见 `src/include/hymofs_uapi.h`）：
 
 - `HYMO_IOC_ADD_RULE`、`HYMO_IOC_DEL_RULE`、`HYMO_IOC_HIDE_RULE`
 - `HYMO_IOC_ADD_MERGE_RULE`、`HYMO_IOC_CLEAR_ALL`、`HYMO_IOC_SET_ENABLED`

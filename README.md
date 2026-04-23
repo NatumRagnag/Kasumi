@@ -10,7 +10,7 @@ It provides redirection, hiding, merge/injection, and spoofing behavior through 
 
 - Repository type: LKM (not an in-tree kernel patch set)
 - Main code: `src/`
-- Control protocol: `src/hymo_magic.h`
+- Control protocol: `src/include/hymofs_uapi.h`
 - Current protocol version: `HYMO_PROTOCOL_VERSION = 14` (api15 is still in development)
 - Hook strategy: ftrace/tracepoint first when available, with kprobe/kretprobe fallback
 - 6.6+ compatibility for `arch_ftrace_get_regs` is included in current code
@@ -80,7 +80,7 @@ If symbol export limitations prevent loading, and you are using newer KernelSU o
 ksud insmod hymofs_lkm.ko
 ```
 
-Common module parameters in `src/hymofs_core.c`:
+Common module parameters in `src/core/hymofs_module.c`:
 
 - `hymo_syscall_nr`
 - `hymo_no_tracepoint=1`
@@ -95,7 +95,7 @@ Common module parameters in `src/hymofs_core.c`:
 1. Userspace obtains an anonymous fd through GET_FD (root-only).
 2. Userspace sends `ioctl` on that fd to manage rules/features.
 
-Main ioctls (see `src/hymo_magic.h` for full ABI):
+Main ioctls (see `src/include/hymofs_uapi.h` for full ABI):
 
 - `HYMO_IOC_ADD_RULE`, `HYMO_IOC_DEL_RULE`, `HYMO_IOC_HIDE_RULE`
 - `HYMO_IOC_ADD_MERGE_RULE`, `HYMO_IOC_CLEAR_ALL`, `HYMO_IOC_SET_ENABLED`
