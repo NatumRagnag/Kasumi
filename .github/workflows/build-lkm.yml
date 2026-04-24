@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all LKM artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
 
       - name: Merge into lkm folder
         run: |
@@ -69,7 +69,7 @@ jobs:
           ls -la lkm/*.asc 2>/dev/null || echo "No .ko.asc files"
 
       - name: Upload combined LKM artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: hymofs-lkm-all
           path: lkm/
@@ -97,7 +97,7 @@ jobs:
           [ -f hymofs-lkm.zip.asc ] && cp hymofs-lkm.zip.asc dist/ || true
 
       - name: Upload zip artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: hymofs-lkm-zip
           path: dist/
@@ -109,12 +109,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo (for scripts)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           sparse-checkout: scripts
 
       - name: Download LKM zip
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: hymofs-lkm-zip
           path: dist
