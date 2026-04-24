@@ -11,7 +11,7 @@ It provides redirection, hiding, merge/injection, and spoofing behavior through 
 - Repository type: LKM (not an in-tree kernel patch set)
 - Main code: `src/`
 - Control protocol: `src/include/hymofs_uapi.h`
-- Current protocol version: `HYMO_PROTOCOL_VERSION = 14` (api15 is still in development)
+- Current protocol version: `HYMO_PROTOCOL_VERSION = 15`
 - Hook strategy: ftrace/tracepoint first when available, with kprobe/kretprobe fallback
 - 6.6+ compatibility for `arch_ftrace_get_regs` is included in current code
 
@@ -80,7 +80,7 @@ If symbol export limitations prevent loading, and you are using newer KernelSU o
 ksud insmod hymofs_lkm.ko
 ```
 
-Common module parameters in `src/core/hymofs_module.c`:
+Common module parameters in `src/core/hymofs_bootstrap.c`:
 
 - `hymo_syscall_nr`
 - `hymo_no_tracepoint=1`

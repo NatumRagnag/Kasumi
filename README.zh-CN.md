@@ -11,7 +11,7 @@ English version： [README.md](./README.md)
 - 仓库形态：LKM（不是 in-tree 内核补丁）
 - 主代码目录：`src/`
 - 协议定义：`src/include/hymofs_uapi.h`
-- 当前协议版本：`HYMO_PROTOCOL_VERSION = 14`，(api15 正在开发中)
+- 当前协议版本：`HYMO_PROTOCOL_VERSION = 15`
 - Hook 策略：优先 ftrace/tracepoint，不可用时回退 kprobe/kretprobe
 - 已包含 `arch_ftrace_get_regs` 在 6.6+ 的兼容处理
 
@@ -78,7 +78,7 @@ insmod hymofs_lkm.ko
 ksud insmod hymofs_lkm.ko
 ```
 
-常用参数（定义于 `src/core/hymofs_module.c`）：
+常用参数（定义于 `src/core/hymofs_bootstrap.c`）：
 
 - `hymo_syscall_nr`
 - `hymo_no_tracepoint=1`
