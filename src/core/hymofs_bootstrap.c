@@ -9,6 +9,7 @@
  */
 #include <linux/module.h>
 #include <linux/kernel.h>
+#include <linux/mount.h>
 #include <linux/namei.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
@@ -54,6 +55,40 @@ MODULE_PARM_DESC(hymo_skip_kallsyms, "1=skip kallsyms resolution, use per-symbol
 static int hymo_dummy_mode_param;
 module_param_named(hymo_dummy_mode, hymo_dummy_mode_param, int, 0600);
 MODULE_PARM_DESC(hymo_dummy_mode, "1=exit immediately after init starts (for testing).");
+
+static void hymofs_resolve_system_dev(void)
+{
+	struct path sys_path = {};
+	struct dentry *dentry;
+	struct vfsmount *mnt;
+	struct super_block *sb;
+	int ret;
+
+	if (!hymo_kern_path)
+		return;
+
+	ret = hymo_kern_path("/system", LOOKUP_FOLLOW, &sys_path);
+	if (ret) {
+		pr_warn("HymoFS: could not resolve /system for stat spoofing: %d\n", ret);
+		return;
+	}
+
+	dentry = READ_ONCE(sys_path.dentry);
+	mnt = READ_ONCE(sys_path.mnt);
+	sb = dentry ? READ_ONCE(dentry->d_sb) : NULL;
+	if (!dentry || !mnt || !sb) {
+		pr_warn("HymoFS: /system resolved to incomplete path (mnt=%p dentry=%p sb=%p), stat spoofing dev disabled\n",
+			mnt, dentry, sb);
+		if (dentry && mnt)
+			path_put(&sys_path);
+		return;
+	}
+
+	hymo_system_dev = sb->s_dev;
+	pr_info("HymoFS: /system dev=%u:%u\n",
+		MAJOR(hymo_system_dev), MINOR(hymo_system_dev));
+	path_put(&sys_path);
+}
 
 static int hymofs_resolve_runtime_symbols(void)
 {
@@ -170,18 +205,7 @@ int hymofs_bootstrap_init(void)
 	}
 	memset(hymo_percpu_base, 0, nr_cpu_ids * sizeof(struct hymo_percpu));
 
-	if (hymo_kern_path) {
-		struct path sys_path;
-
-		if (hymo_kern_path("/system", LOOKUP_FOLLOW, &sys_path) == 0) {
-			hymo_system_dev = sys_path.dentry->d_sb->s_dev;
-			pr_info("HymoFS: /system dev=%u:%u\n",
-				MAJOR(hymo_system_dev), MINOR(hymo_system_dev));
-			path_put(&sys_path);
-		} else {
-			pr_warn("HymoFS: could not resolve /system for stat spoofing\n");
-		}
-	}
+	hymofs_resolve_system_dev();
 
 	ret = hymofs_proc_hooks_init(hymo_skip_getfd_param, hymo_no_tracepoint_param,
 				     hymo_skip_extra_kprobes_param);
