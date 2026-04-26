@@ -565,12 +565,14 @@ static int kasumi_dispatch_cmd(unsigned int cmd, void __user *arg)
 		features |= KSM_FEATURE_MERGE_DIR;
 		if (kasumi_getxattr_kprobe_registered)
 			features |= KSM_FEATURE_SELINUX_BYPASS;
-		if (kasumi_mount_hide_vfsmnt_registered || kasumi_mount_hide_mountinfo_registered ||
+		if (kasumi_proc_proxy_registered ||
+		    kasumi_mount_hide_vfsmnt_registered || kasumi_mount_hide_mountinfo_registered ||
 		    kasumi_mount_hide_vfs_read_registered ||
 		    kasumi_mount_hide_read_fallback_registered ||
 		    kasumi_mount_hide_pread_fallback_registered)
 			features |= KSM_FEATURE_MOUNT_HIDE;
-		if (kasumi_mount_hide_vfs_read_registered ||
+		if (kasumi_proc_proxy_registered ||
+		    kasumi_mount_hide_vfs_read_registered ||
 		    kasumi_mount_hide_read_fallback_registered ||
 		    kasumi_mount_hide_pread_fallback_registered ||
 		    kasumi_maps_seq_read_registered)
@@ -659,7 +661,10 @@ static int kasumi_dispatch_cmd(unsigned int cmd, void __user *arg)
 		written += n;
 
 		/* mountinfo/mounts hide */
-		if (kasumi_mount_hide_vfsmnt_registered && kasumi_mount_hide_mountinfo_registered)
+		if (kasumi_proc_proxy_registered)
+			n = scnprintf(kbuf + written, buf_size - written,
+				     "mountinfo/mounts: proxy (open fd read filter)\n");
+		else if (kasumi_mount_hide_vfsmnt_registered && kasumi_mount_hide_mountinfo_registered)
 			n = scnprintf(kbuf + written, buf_size - written,
 				     "mountinfo/mounts: kprobe (show_mountinfo, show_vfsmnt)\n");
 		else if (kasumi_mount_hide_vfsmnt_registered)
@@ -686,7 +691,10 @@ static int kasumi_dispatch_cmd(unsigned int cmd, void __user *arg)
 		written += n;
 
 		/* maps spoof (read kretprobe or seq_read fallback) */
-		if (kasumi_mount_hide_vfs_read_registered)
+		if (kasumi_proc_proxy_registered)
+			n = scnprintf(kbuf + written, buf_size - written,
+				     "maps: proxy (open fd read filter)\n");
+		else if (kasumi_mount_hide_vfs_read_registered)
 			n = scnprintf(kbuf + written, buf_size - written,
 				     "maps: kretprobe (vfs_read buffer filter)\n");
 		else if (kasumi_mount_hide_read_fallback_registered &&

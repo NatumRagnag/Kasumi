@@ -107,6 +107,7 @@ int kasumi_mount_hide_vfs_read_registered;
 int kasumi_mount_hide_read_fallback_registered;
 int kasumi_mount_hide_pread_fallback_registered;
 int kasumi_maps_seq_read_registered;
+int kasumi_proc_proxy_registered;
 int kasumi_feature_enabled_mask = 0xFFFFFFFF;
 int kasumi_statfs_kretprobe_registered;
 int kasumi_ni_kprobe_registered;

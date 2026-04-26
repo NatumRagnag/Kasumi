@@ -35,6 +35,7 @@
 #include "kasumi_entrypoints.h"
 #include "kasumi_path_policy.h"
 #include "kasumi_proc_hooks.h"
+#include "kasumi_tracepoint_hooks.h"
 #include "kasumi_fake_mountinfo.h"
 
 #ifndef D_REAL_DATA
@@ -110,6 +111,9 @@ static struct kprobe kasumi_kp_show_mountinfo = {
 static char *kasumi_read_filter_buf;
 static DEFINE_MUTEX(kasumi_read_filter_mutex);
 
+static size_t kasumi_filter_overlay_lines(char *kbuf, size_t len);
+static size_t kasumi_filter_maps_lines(char *kbuf, size_t len);
+
 struct kasumi_read_mount_ri_data {
 	int fd;
 	void __user *buf;
@@ -130,9 +134,42 @@ bool kasumi_path_is_proc_mountinfo(const char *path)
 	       strstr(path, "/mountinfo");
 }
 
+static bool kasumi_path_is_proc_maps_view(const char *path)
+{
+	return path && strncmp(path, "/proc/", 6) == 0 &&
+	       (strstr(path, "/maps") || strstr(path, "/smaps"));
+}
+
+enum kasumi_proc_proxy_kind {
+	KASUMI_PROC_PROXY_NONE = 0,
+	KASUMI_PROC_PROXY_MOUNTINFO,
+	KASUMI_PROC_PROXY_MOUNTS,
+	KASUMI_PROC_PROXY_MAPS,
+};
+
+static enum kasumi_proc_proxy_kind kasumi_proc_proxy_kind_for_path(const char *path)
+{
+	if ((kasumi_feature_enabled_mask & KSM_FEATURE_MOUNT_HIDE) &&
+	    kasumi_path_is_proc_mountinfo(path))
+		return KASUMI_PROC_PROXY_MOUNTINFO;
+	if ((kasumi_feature_enabled_mask & KSM_FEATURE_MOUNT_HIDE) &&
+	    path && strncmp(path, "/proc/", 6) == 0 && strstr(path, "/mounts"))
+		return KASUMI_PROC_PROXY_MOUNTS;
+	if ((kasumi_feature_enabled_mask & KSM_FEATURE_MAPS_SPOOF) &&
+	    kasumi_path_is_proc_maps_view(path))
+		return KASUMI_PROC_PROXY_MAPS;
+	return KASUMI_PROC_PROXY_NONE;
+}
+
+bool kasumi_path_needs_proc_proxy(const char *path)
+{
+	return kasumi_proc_proxy_kind_for_path(path) != KASUMI_PROC_PROXY_NONE;
+}
+
 struct kasumi_mount_file_proxy {
 	const struct file_operations *orig_fops;
 	struct file_operations proxy_fops;
+	enum kasumi_proc_proxy_kind kind;
 };
 
 static ssize_t kasumi_mount_proxy_read(struct file *file, char __user *buf,
@@ -142,26 +179,64 @@ static ssize_t kasumi_mount_proxy_read(struct file *file, char __user *buf,
 		container_of(file->f_op, struct kasumi_mount_file_proxy, proxy_fops);
 	ssize_t ret;
 	loff_t pos;
+	size_t new_len;
 
 	if (!proxy->orig_fops->read)
 		return -EINVAL;
-	if (!(kasumi_feature_enabled_mask & KSM_FEATURE_MOUNT_HIDE) ||
-	    !kasumi_should_apply_hide_rules())
-		return proxy->orig_fops->read(file, buf, count, ppos);
 
-	pos = ppos ? *ppos : file->f_pos;
-	ret = kasumi_fake_mi_serve(file, buf, count, 0, pos);
-	if (ret == -1)
-		return 0;
-	if (ret > 0) {
-		if (ppos)
-			*ppos += ret;
-		else
-			file->f_pos += ret;
+	if (proxy->kind == KASUMI_PROC_PROXY_MOUNTINFO &&
+	    (kasumi_feature_enabled_mask & KSM_FEATURE_MOUNT_HIDE) &&
+	    kasumi_should_apply_hide_rules()) {
+		pos = ppos ? *ppos : file->f_pos;
+		ret = kasumi_fake_mi_serve(file, buf, count, 0, pos);
+		if (ret == -1)
+			return 0;
+		if (ret > 0) {
+			if (ppos)
+				*ppos += ret;
+			else
+				file->f_pos += ret;
+			return ret;
+		}
+	}
+
+	ret = proxy->orig_fops->read(file, buf, count, ppos);
+	if (ret <= 0 || ret > KASUMI_READ_MOUNT_FILTER_BUF || !kasumi_read_filter_buf)
+		return ret;
+
+	if (proxy->kind == KASUMI_PROC_PROXY_MOUNTINFO ||
+	    proxy->kind == KASUMI_PROC_PROXY_MOUNTS) {
+		if (!(kasumi_feature_enabled_mask & KSM_FEATURE_MOUNT_HIDE))
+			return ret;
+		mutex_lock(&kasumi_read_filter_mutex);
+		if (copy_from_user(kasumi_read_filter_buf, buf, (size_t)ret)) {
+			mutex_unlock(&kasumi_read_filter_mutex);
+			return ret;
+		}
+		new_len = kasumi_filter_overlay_lines(kasumi_read_filter_buf, (size_t)ret);
+		if (new_len < (size_t)ret &&
+		    copy_to_user(buf, kasumi_read_filter_buf, new_len) == 0)
+			ret = (ssize_t)new_len;
+		mutex_unlock(&kasumi_read_filter_mutex);
 		return ret;
 	}
 
-	return proxy->orig_fops->read(file, buf, count, ppos);
+	if (proxy->kind == KASUMI_PROC_PROXY_MAPS) {
+		if (!(kasumi_feature_enabled_mask & KSM_FEATURE_MAPS_SPOOF))
+			return ret;
+		mutex_lock(&kasumi_read_filter_mutex);
+		if (copy_from_user(kasumi_read_filter_buf, buf, (size_t)ret)) {
+			mutex_unlock(&kasumi_read_filter_mutex);
+			return ret;
+		}
+		new_len = kasumi_filter_maps_lines(kasumi_read_filter_buf, (size_t)ret);
+		if (new_len != (size_t)ret &&
+		    copy_to_user(buf, kasumi_read_filter_buf, new_len) == 0)
+			ret = (ssize_t)new_len;
+		mutex_unlock(&kasumi_read_filter_mutex);
+	}
+
+	return ret;
 }
 
 static ssize_t kasumi_mount_proxy_read_iter(struct kiocb *iocb,
@@ -175,7 +250,8 @@ static ssize_t kasumi_mount_proxy_read_iter(struct kiocb *iocb,
 	kasumi_log("mount_proxy: read_iter pid=%d comm=%s count=%zu\n",
 		 task_pid_nr(current), current->comm, iov_iter_count(to));
 
-	if (!(kasumi_feature_enabled_mask & KSM_FEATURE_MOUNT_HIDE) ||
+	if (proxy->kind != KASUMI_PROC_PROXY_MOUNTINFO ||
+	    !(kasumi_feature_enabled_mask & KSM_FEATURE_MOUNT_HIDE) ||
 	    !kasumi_should_apply_hide_rules()) {
 		if (!proxy->orig_fops->read_iter)
 			return -EINVAL;
@@ -216,6 +292,7 @@ int kasumi_mount_proxy_install_fd(int fd)
 	char *path_buf;
 	char *path;
 	const struct file_operations *new_fops;
+	enum kasumi_proc_proxy_kind kind;
 	int ret = 0;
 
 	file = fget(fd);
@@ -232,7 +309,12 @@ int kasumi_mount_proxy_install_fd(int fd)
 		goto out;
 	}
 	path = d_path(&file->f_path, path_buf, PAGE_SIZE);
-	if (IS_ERR(path) || !kasumi_path_is_proc_mountinfo(path)) {
+	if (IS_ERR(path)) {
+		free_page((unsigned long)path_buf);
+		goto out;
+	}
+	kind = kasumi_proc_proxy_kind_for_path(path);
+	if (kind == KASUMI_PROC_PROXY_NONE) {
 		free_page((unsigned long)path_buf);
 		goto out;
 	}
@@ -245,6 +327,7 @@ int kasumi_mount_proxy_install_fd(int fd)
 	}
 
 	proxy->orig_fops = file->f_op;
+	proxy->kind = kind;
 	proxy->proxy_fops = *file->f_op;
 	proxy->proxy_fops.owner = THIS_MODULE;
 	if (proxy->orig_fops->read)
@@ -260,8 +343,8 @@ int kasumi_mount_proxy_install_fd(int fd)
 		goto out;
 	}
 	file->f_op = new_fops;
-	kasumi_log("mount_proxy: installed fd=%d pid=%d comm=%s\n",
-		 fd, task_pid_nr(current), current->comm);
+	kasumi_log("proc_proxy: installed fd=%d kind=%d pid=%d comm=%s\n",
+		 fd, kind, task_pid_nr(current), current->comm);
 
 out:
 	fput(file);
@@ -1029,25 +1112,39 @@ void kasumi_proc_read_hooks_init(void)
 	unsigned long pread_addr = 0;
 	const char *read_sym_name = NULL;
 	const char *pread_sym_name = NULL;
+	bool use_proxy_filter = kasumi_tracepoint_path_registered();
 	bool use_syscall_filter = false;
 	int i;
 
-	for (i = 0; read_syms[i]; i++) {
-		read_addr = kasumi_lookup_name(read_syms[i]);
-		if (read_addr) {
-			read_sym_name = read_syms[i];
-			break;
-		}
-	}
-	for (i = 0; pread_syms[i]; i++) {
-		pread_addr = kasumi_lookup_name(pread_syms[i]);
-		if (pread_addr) {
-			pread_sym_name = pread_syms[i];
-			break;
+	if (use_proxy_filter) {
+		kasumi_read_filter_buf = vmalloc(KASUMI_READ_MOUNT_FILTER_BUF);
+		if (kasumi_read_filter_buf) {
+			kasumi_proc_proxy_registered = 1;
+			pr_info("Kasumi: proc read filtering via open fd proxy, kprobes kept as fallback\n");
+		} else {
+			use_proxy_filter = false;
+			pr_warn("Kasumi: proc proxy buffer allocation failed, falling back to read kretprobes\n");
 		}
 	}
 
-	if (vfs_read_addr || read_addr || pread_addr) {
+	if (!use_proxy_filter) {
+		for (i = 0; read_syms[i]; i++) {
+			read_addr = kasumi_lookup_name(read_syms[i]);
+			if (read_addr) {
+				read_sym_name = read_syms[i];
+				break;
+			}
+		}
+		for (i = 0; pread_syms[i]; i++) {
+			pread_addr = kasumi_lookup_name(pread_syms[i]);
+			if (pread_addr) {
+				pread_sym_name = pread_syms[i];
+				break;
+			}
+		}
+	}
+
+	if (!use_proxy_filter && (vfs_read_addr || read_addr || pread_addr)) {
 		kasumi_read_filter_buf = vmalloc(KASUMI_READ_MOUNT_FILTER_BUF);
 		if (kasumi_read_filter_buf) {
 			if (!use_syscall_filter && read_addr) {
@@ -1077,7 +1174,7 @@ void kasumi_proc_read_hooks_init(void)
 		}
 	}
 
-	if (!use_syscall_filter) {
+	if (!use_proxy_filter && !use_syscall_filter) {
 		unsigned long addr_vfsmnt = kasumi_lookup_name("show_vfsmnt");
 		unsigned long addr_mountinfo = kasumi_lookup_name("show_mountinfo");
 
@@ -1161,6 +1258,8 @@ void kasumi_proc_read_hooks_init(void)
 
 void kasumi_proc_read_hooks_exit(void)
 {
+	bool had_proc_proxy = kasumi_proc_proxy_registered;
+
 	if (kasumi_statfs_kretprobe_registered)
 		unregister_kretprobe(&kasumi_krp_statfs);
 	if (kasumi_mount_hide_vfs_read_registered)
@@ -1169,13 +1268,9 @@ void kasumi_proc_read_hooks_exit(void)
 		unregister_kretprobe(&kasumi_krp_read_mount_filter);
 	if (kasumi_mount_hide_pread_fallback_registered)
 		unregister_kretprobe(&kasumi_krp_pread_mount_filter);
-	if (kasumi_mount_hide_vfs_read_registered ||
-	    kasumi_mount_hide_read_fallback_registered ||
-	    kasumi_mount_hide_pread_fallback_registered) {
-		if (kasumi_read_filter_buf) {
-			vfree(kasumi_read_filter_buf);
-			kasumi_read_filter_buf = NULL;
-		}
+	if (kasumi_read_filter_buf) {
+		vfree(kasumi_read_filter_buf);
+		kasumi_read_filter_buf = NULL;
 	}
 	if (kasumi_maps_seq_read_registered) {
 		unregister_kretprobe(&kasumi_krp_seq_read_maps);
@@ -1184,7 +1279,8 @@ void kasumi_proc_read_hooks_exit(void)
 			kasumi_maps_spoof_buf = NULL;
 		}
 	}
-	if (kasumi_mount_hide_vfs_read_registered ||
+	if (had_proc_proxy ||
+	    kasumi_mount_hide_vfs_read_registered ||
 	    kasumi_mount_hide_read_fallback_registered ||
 	    kasumi_mount_hide_pread_fallback_registered ||
 	    kasumi_maps_seq_read_registered) {
@@ -1197,6 +1293,7 @@ void kasumi_proc_read_hooks_exit(void)
 		}
 		mutex_unlock(&kasumi_maps_mutex);
 	}
+	kasumi_proc_proxy_registered = 0;
 	if (kasumi_mount_hide_mountinfo_registered)
 		unregister_kprobe(&kasumi_kp_show_mountinfo);
 	if (kasumi_mount_hide_vfsmnt_registered)

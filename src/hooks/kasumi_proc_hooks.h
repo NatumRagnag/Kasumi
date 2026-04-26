@@ -19,5 +19,6 @@ void kasumi_proc_read_hooks_exit(void);
 int kasumi_mount_proxy_install_fd(int fd);
 bool kasumi_path_is_proc_mount_view(const char *path);
 bool kasumi_path_is_proc_mountinfo(const char *path);
+bool kasumi_path_needs_proc_proxy(const char *path);
 
 #endif /* _KASUMI_PROC_HOOKS_H */

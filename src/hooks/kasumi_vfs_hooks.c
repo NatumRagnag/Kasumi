@@ -568,12 +568,11 @@ void kasumi_handle_sys_enter_path(struct pt_regs *regs, long id)
 	if (atomic_long_read(&kasumi_xattr_source_tgid) == (long)task_tgid_vnr(current))
 		return;
 	kasumi_this_cpu()->mount_proxy_pending = 0;
-	check_mount_proxy = (kasumi_feature_enabled_mask & KSM_FEATURE_MOUNT_HIDE) &&
-			    (id == __NR_openat
+	check_mount_proxy = id == __NR_openat
 #ifdef __NR_openat2
-			     || id == __NR_openat2
+			    || id == __NR_openat2
 #endif
-			    );
+			    ;
 	have_path_filters = atomic_read(&kasumi_rule_count) != 0 ||
 			    atomic_read(&kasumi_hide_count) != 0;
 	/* Fast path: no path filters and no mount view fd wrapping need. */
@@ -596,16 +595,17 @@ void kasumi_handle_sys_enter_path(struct pt_regs *regs, long id)
 		buf[KASUMI_PATH_BUF - 1] = '\0';
 	}
 
-	if (check_mount_proxy && buf[0] == '/' &&
-	    kasumi_path_is_proc_mountinfo(buf) &&
-	    kasumi_should_apply_hide_rules()) {
+	if (check_mount_proxy && buf[0] == '/' && kasumi_path_needs_proc_proxy(buf)) {
 		int prep_rc;
-		kasumi_log("mount_proxy: arm pid=%d comm=%s path=%s\n",
+		kasumi_log("proc_proxy: arm pid=%d comm=%s path=%s\n",
 			 task_pid_nr(current), current->comm, buf);
 		kasumi_this_cpu()->mount_proxy_pending = 1;
-		prep_rc = kasumi_fake_mi_prepare(false);
-		kasumi_log("mount_proxy: prepare pid=%d comm=%s rc=%d\n",
-			 task_pid_nr(current), current->comm, prep_rc);
+		if (kasumi_path_is_proc_mountinfo(buf) &&
+		    kasumi_should_apply_hide_rules()) {
+			prep_rc = kasumi_fake_mi_prepare(false);
+			kasumi_log("proc_proxy: prepare pid=%d comm=%s rc=%d\n",
+				 task_pid_nr(current), current->comm, prep_rc);
+		}
 	}
 
 	if (!have_path_filters)

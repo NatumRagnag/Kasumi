@@ -123,6 +123,7 @@ extern int kasumi_mount_hide_vfs_read_registered;
 extern int kasumi_mount_hide_read_fallback_registered;
 extern int kasumi_mount_hide_pread_fallback_registered;
 extern int kasumi_maps_seq_read_registered;
+extern int kasumi_proc_proxy_registered;
 extern int kasumi_feature_enabled_mask;
 extern int kasumi_statfs_kretprobe_registered;
 extern int kasumi_ni_kprobe_registered;
