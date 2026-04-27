@@ -1448,14 +1448,10 @@ void kasumi_proc_read_hooks_init(void)
 		}
 	}
 
-	if (!kasumi_statfs_kretprobe_registered && !kasumi_statfs_tracepoint_registered) {
-		bool prefer_tracepoint = kasumi_tracepoint_path_registered() &&
-					 kasumi_tracepoint_getfd_registered();
-
-		if (prefer_tracepoint) {
-			kasumi_statfs_tracepoint_registered = 1;
-			pr_info("Kasumi: statfs f_type spoof via sys_enter/sys_exit tracepoint, kretprobe kept as fallback\n");
-		} else {
+	if (!kasumi_statfs_kretprobe_registered) {
+		/* Always kretprobe, never tracepoint: kern_path() may
+		 * sleep but tracepoint runs in atomic context. */
+		{
 			static const char *statfs_syms[] = {
 #if defined(__aarch64__)
 				"__arm64_sys_statfs", "sys_statfs", "SyS_statfs", NULL
