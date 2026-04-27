@@ -604,7 +604,11 @@ static int kasumi_dispatch_cmd(unsigned int cmd, void __user *arg)
 			return -ENOMEM;
 
 		/* GET_FD */
-		if (kasumi_tracepoint_path_registered() && kasumi_tracepoint_getfd_registered())
+		if (kasumi_syscall_dispatcher_nr >= 0 &&
+		    (kasumi_has_syscall_hook(__NR_reboot) ||
+		     kasumi_has_syscall_hook(__NR_prctl)))
+			n = scnprintf(kbuf + written, buf_size - written, "GET_FD: TSR\n");
+		else if (kasumi_tracepoint_path_registered() && kasumi_tracepoint_getfd_registered())
 			n = scnprintf(kbuf + written, buf_size - written,
 				     "GET_FD: tracepoint (sys_enter/sys_exit)\n");
 		else if (kasumi_ni_kprobe_registered)

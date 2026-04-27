@@ -172,6 +172,85 @@ bool kasumi_has_syscall_hook(int nr)
 #define KASUMI_HIDE_PATH "/.kasumi_hidden_placeholder"
 #endif
 
+/* saved original handlers for GET_FD / cmdline */
+static kasumi_syscall_hook_fn orig_kernel_reboot;
+static kasumi_syscall_hook_fn orig_kernel_prctl;
+
+/* ---- GET_FD via reboot / prctl / custom nr (TSR) ---------------------- */
+
+static long h_getfd(const struct pt_regs *regs, int nr)
+{
+#if defined(__aarch64__)
+	unsigned long a0 = regs->regs[0];
+	unsigned long a1 = regs->regs[1];
+	unsigned long a2 = regs->regs[2];
+#else
+	unsigned long a0 = regs->di;
+	unsigned long a1 = regs->si;
+	unsigned long a2 = regs->dx;
+#endif
+	int fd;
+
+	if (a0 != KSM_MAGIC1 || a1 != KSM_MAGIC2 ||
+	    a2 != (unsigned long)KSM_CMD_GET_FD)
+		return -ENOSYS;
+
+	if (!uid_eq(current_uid(), GLOBAL_ROOT_UID))
+		return -ENOSYS;
+
+	fd = kasumi_get_anon_fd();
+	if (fd < 0)
+		return -ENOSYS;
+
+#if defined(__aarch64__)
+	{
+		int __user *fd_ptr = (int __user *)(unsigned long)regs->regs[3];
+		if (fd_ptr)
+			put_user(fd, fd_ptr);
+	}
+#endif
+	return fd;
+}
+
+static long h_reboot(const struct pt_regs *regs)
+{
+	long ret = h_getfd(regs, __NR_reboot);
+	return ret >= 0 ? ret : orig_kernel_reboot(regs);
+}
+
+static long h_prctl(const struct pt_regs *regs)
+{
+#if defined(__aarch64__)
+	unsigned long option = regs->regs[0];
+	unsigned long arg2 = regs->regs[1];
+#else
+	unsigned long option = regs->di;
+	unsigned long arg2 = regs->si;
+#endif
+
+	if (option != (unsigned long)KSM_PRCTL_GET_FD)
+		return orig_kernel_prctl(regs);
+
+	if (!uid_eq(current_uid(), GLOBAL_ROOT_UID))
+		return orig_kernel_prctl(regs);
+
+	{
+		int fd = kasumi_get_anon_fd();
+		if (fd < 0)
+			return orig_kernel_prctl(regs);
+#if defined(__aarch64__)
+		{
+			int __user *fd_ptr = (int __user *)(unsigned long)arg2;
+			if (fd_ptr)
+				put_user(fd, fd_ptr);
+		}
+#endif
+		return fd;
+	}
+}
+
+/* ---- path redirect + mount proxy (TSR) --------------------------------- */
+
 static long do_openat(const struct pt_regs *regs, kasumi_syscall_hook_fn orig)
 {
 	char path[KSM_MAX_LEN_PATHNAME];
@@ -269,6 +348,10 @@ int kasumi_syscall_redirect_init(void)
 		kasumi_syscall_table)[__NR_openat2];
 	orig_kernel_statfs = ((kasumi_syscall_hook_fn *)
 		kasumi_syscall_table)[__NR_statfs];
+	orig_kernel_reboot = ((kasumi_syscall_hook_fn *)
+		kasumi_syscall_table)[__NR_reboot];
+	orig_kernel_prctl = ((kasumi_syscall_hook_fn *)
+		kasumi_syscall_table)[__NR_prctl];
 
 	slot = find_ni_slot();
 	if (slot < 0) {
@@ -289,8 +372,10 @@ int kasumi_syscall_redirect_init(void)
 	kasumi_register_syscall_hook(__NR_openat,  h_openat);
 	kasumi_register_syscall_hook(__NR_openat2, h_openat2);
 	kasumi_register_syscall_hook(__NR_statfs,  h_statfs);
+	kasumi_register_syscall_hook(__NR_reboot,  h_reboot);
+	kasumi_register_syscall_hook(__NR_prctl,   h_prctl);
 
-	pr_info("Kasumi: redirect active @ slot %d, 3 hooks\n",
+	pr_info("Kasumi: redirect active @ slot %d, 5 hooks\n",
 		kasumi_syscall_dispatcher_nr);
 	return 0;
 }
@@ -310,5 +395,7 @@ void kasumi_syscall_redirect_exit(void)
 	orig_kernel_openat  = NULL;
 	orig_kernel_openat2 = NULL;
 	orig_kernel_statfs  = NULL;
+	orig_kernel_reboot  = NULL;
+	orig_kernel_prctl   = NULL;
 	pr_info("Kasumi: redirect exited\n");
 }
