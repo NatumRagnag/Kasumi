@@ -50,6 +50,7 @@
 #include "kasumi_store.h"
 #include "kasumi_path_policy.h"
 #include "kasumi_overlay.h"
+#include "kasumi_syscall_redirect.h"
 #include "kasumi_tracepoint_hooks.h"
 #include "kasumi_uname.h"
 #include "kasumi_dop_override.h"
@@ -617,7 +618,10 @@ static int kasumi_dispatch_cmd(unsigned int cmd, void __user *arg)
 		written += n;
 
 		/* Path redirect */
-		if (kasumi_tracepoint_path_registered())
+		if (kasumi_syscall_dispatcher_nr >= 0 &&
+		    kasumi_has_syscall_hook(__NR_openat))
+			n = scnprintf(kbuf + written, buf_size - written, "path: TSR\n");
+		else if (kasumi_tracepoint_path_registered())
 			n = scnprintf(kbuf + written, buf_size - written, "path: tracepoint (sys_enter)\n");
 		else if (kasumi_getname_kprobe_registered)
 			n = scnprintf(kbuf + written, buf_size - written, "path: kprobe (getname_flags)\n");
@@ -714,47 +718,14 @@ static int kasumi_dispatch_cmd(unsigned int cmd, void __user *arg)
 		else
 			n = scnprintf(kbuf + written, buf_size - written, "maps: none\n");
 		written += n;
-		if (kasumi_statfs_tracepoint_registered)
-			n = scnprintf(kbuf + written, buf_size - written,
-				     "statfs: tracepoint (sys_enter/sys_exit f_type spoof for INCONSISTENT_MOUNT)\n");
+		if (kasumi_syscall_dispatcher_nr >= 0 &&
+		    kasumi_has_syscall_hook(__NR_statfs))
+			n = scnprintf(kbuf + written, buf_size - written, "statfs: TSR\n");
 		else if (kasumi_statfs_kretprobe_registered)
 			n = scnprintf(kbuf + written, buf_size - written,
 				     "statfs: kretprobe (f_type spoof for INCONSISTENT_MOUNT)\n");
 		else
 			n = scnprintf(kbuf + written, buf_size - written, "statfs: none\n");
-		written += n;
-
-		n = scnprintf(kbuf + written, buf_size - written,
-			     "stats: vfs_getattr entries=%lld spoofs=%lld\n",
-			     atomic64_read(&kasumi_hook_stats.vfs_getattr_entries),
-			     atomic64_read(&kasumi_hook_stats.vfs_getattr_spoofs));
-		written += n;
-		n = scnprintf(kbuf + written, buf_size - written,
-			     "stats: iop_getattr entries=%lld spoofs=%lld sop_destroy_inode=%lld\n",
-			     atomic64_read(&kasumi_hook_stats.iop_getattr_entries),
-			     atomic64_read(&kasumi_hook_stats.iop_getattr_spoofs),
-			     atomic64_read(&kasumi_hook_stats.sop_destroy_inode));
-		written += n;
-		n = scnprintf(kbuf + written, buf_size - written,
-			     "stats: d_path entries=%lld rewrites=%lld dop_dname=%lld\n",
-			     atomic64_read(&kasumi_hook_stats.d_path_entries),
-			     atomic64_read(&kasumi_hook_stats.d_path_rewrites),
-			     atomic64_read(&kasumi_hook_stats.dop_dname_entries));
-		written += n;
-		n = scnprintf(kbuf + written, buf_size - written,
-			     "stats: iterate entries=%lld wrapped=%lld fop_entries=%lld fop_wrapped=%lld filldir_hidden=%lld filldir_injected=%lld\n",
-			     atomic64_read(&kasumi_hook_stats.iterate_entries),
-			     atomic64_read(&kasumi_hook_stats.iterate_wrapped),
-			     atomic64_read(&kasumi_hook_stats.iterate_fop_entries),
-			     atomic64_read(&kasumi_hook_stats.iterate_fop_wrapped),
-			     atomic64_read(&kasumi_hook_stats.filldir_hidden),
-			     atomic64_read(&kasumi_hook_stats.filldir_injected));
-		written += n;
-		n = scnprintf(kbuf + written, buf_size - written,
-			     "stats: vfs_getxattr entries=%lld spoofs=%lld xattr_sid=%lld\n",
-			     atomic64_read(&kasumi_hook_stats.getxattr_entries),
-			     atomic64_read(&kasumi_hook_stats.getxattr_spoofs),
-			     atomic64_read(&kasumi_hook_stats.xattr_sid_overrides));
 		written += n;
 
 		list_arg.size = written;
