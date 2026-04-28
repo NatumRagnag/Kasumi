@@ -659,7 +659,10 @@ static int kasumi_dispatch_cmd(unsigned int cmd, void __user *arg)
 		}
 
 		/* cmdline */
-		if (kasumi_tracepoint_path_registered() && kasumi_tracepoint_getfd_registered())
+		if (kasumi_syscall_dispatcher_nr >= 0 &&
+		    kasumi_has_syscall_hook(__NR_read))
+			n = scnprintf(kbuf + written, buf_size - written, "cmdline: TSR\n");
+		else if (kasumi_tracepoint_path_registered() && kasumi_tracepoint_getfd_registered())
 			n = scnprintf(kbuf + written, buf_size - written, "cmdline: tracepoint (sys_enter/sys_exit)\n");
 		else if (kasumi_cmdline_kretprobe_registered)
 			n = scnprintf(kbuf + written, buf_size - written, "cmdline: kretprobe (read)\n");

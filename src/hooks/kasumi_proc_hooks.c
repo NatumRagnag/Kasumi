@@ -495,6 +495,14 @@ int kasumi_proc_hooks_init(bool skip_getfd, bool no_tracepoint, bool skip_extra_
 
 void kasumi_proc_hooks_exit(void)
 {
+	/*
+	 * Note: tracepoint sys_enter/sys_exit unregistration is intentionally
+	 * NOT performed here.  kasumi_bootstrap_exit() drives that as PHASE 1
+	 * (before any handler-reachable resource is freed) so that proc-fd
+	 * proxies, fake mountinfo, and other state cleaned up below cannot be
+	 * raced against by a high-frequency syscall (read/openat) still being
+	 * dispatched into our redirect.
+	 */
 	kasumi_proc_read_hooks_exit();
 	if (kasumi_cmdline_kretprobe_registered)
 		unregister_kretprobe(&kasumi_krp_cmdline_read);
@@ -510,5 +518,4 @@ void kasumi_proc_hooks_exit(void)
 		unregister_kretprobe(&kasumi_krp_ni);
 		unregister_kprobe(&kasumi_kp_ni);
 	}
-	kasumi_tracepoint_path_exit();
 }

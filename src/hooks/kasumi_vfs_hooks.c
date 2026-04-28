@@ -58,6 +58,7 @@
 #include "kasumi_fake_mountinfo.h"
 #include "kasumi_iop_override.h"
 #include "kasumi_fop_override.h"
+#include "kasumi_syscall_redirect.h"
 
 #ifndef KASUMI_VFS_KPROBES
 #define KASUMI_VFS_KPROBES 1
@@ -353,8 +354,9 @@ void kasumi_handle_sys_exit_getfd(struct pt_regs *regs, long ret)
 }
 
 #if defined(__aarch64__) || defined(__x86_64__)
-/* Cmdline spoof: check if fd refers to /proc/cmdline (tracepoint + kretprobe path) */
-static bool kasumi_fd_is_proc_cmdline(int fd)
+/* Cmdline spoof: check if fd refers to /proc/cmdline.  Used by both the
+ * tracepoint sys_enter path and the TSR h_read handler. */
+bool kasumi_fd_is_proc_cmdline(int fd)
 {
 	struct file *file;
 	struct dentry *dentry, *parent;
@@ -385,6 +387,13 @@ void kasumi_handle_sys_enter_cmdline(struct pt_regs *regs, long id)
 	if (!kasumi_cmdline_spoof_active)
 		return;
 	if (id != __NR_read)
+		return;
+	/*
+	 * If the TSR redirect has installed h_read, it owns the spoof in one
+	 * shot — leave the percpu cmdline_ctx untouched so the sys_exit handler
+	 * doesn't double-spoof an already-rewritten buffer.
+	 */
+	if (kasumi_has_syscall_hook(__NR_read))
 		return;
 	if (READ_ONCE(kasumi_daemon_pid) > 0 && task_tgid_vnr(current) == READ_ONCE(kasumi_daemon_pid))
 		return;

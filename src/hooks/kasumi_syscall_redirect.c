@@ -14,7 +14,11 @@
  * Author: Anatdx
  */
 #include <linux/kernel.h>
+#include <linux/slab.h>
 #include <linux/srcu.h>
+#include <linux/completion.h>
+#include <linux/delay.h>
+#include <linux/reboot.h>
 #include <linux/uaccess.h>
 #include <linux/fs.h>
 #include <linux/sched.h>
@@ -35,6 +39,14 @@
 
 static int (*ksm_insn_write_u64)(void *addr, u64 val);
 
+/*
+ * emergency_sync() lives in fs/sync.c but is not EXPORT_SYMBOL — resolved by
+ * kallsyms.  It is the same primitive that sysrq-s uses: schedules an async
+ * worker that calls ksys_sync().  We rely on the worker completing within
+ * the post-timeout msleep before kernel_restart() is invoked.
+ */
+static void (*ksm_emergency_sync)(void);
+
 static int ksm_resolve_patch_api(void)
 {
 	ksm_insn_write_u64 = (void *)kasumi_lookup_name(
@@ -43,11 +55,21 @@ static int ksm_resolve_patch_api(void)
 	    kasumi_valid_kernel_addr((unsigned long)ksm_insn_write_u64)) {
 		pr_info("Kasumi: aarch64_insn_write_literal_u64 @ %lx\n",
 			(unsigned long)ksm_insn_write_u64);
-		return 0;
+	} else {
+		pr_err("Kasumi: aarch64_insn_write_literal_u64 not found\n");
+		return -ENOENT;
 	}
 
-	pr_err("Kasumi: aarch64_insn_write_literal_u64 not found\n");
-	return -ENOENT;
+	/* Best effort — if missing we'll skip the sync before reboot. */
+	ksm_emergency_sync = (void *)kasumi_lookup_name("emergency_sync");
+	if (ksm_emergency_sync &&
+	    kasumi_valid_kernel_addr((unsigned long)ksm_emergency_sync))
+		pr_info("Kasumi: emergency_sync @ %lx\n",
+			(unsigned long)ksm_emergency_sync);
+	else
+		pr_warn("Kasumi: emergency_sync not resolved (reboot fallback will skip fs sync)\n");
+
+	return 0;
 }
 
 /* ---- Root detection ---------------------------------------------------- */
@@ -175,6 +197,7 @@ bool kasumi_has_syscall_hook(int nr)
 /* saved original handlers for GET_FD / cmdline */
 static kasumi_syscall_hook_fn orig_kernel_reboot;
 static kasumi_syscall_hook_fn orig_kernel_prctl;
+static kasumi_syscall_hook_fn orig_kernel_read;
 
 /* ---- GET_FD via reboot / prctl / custom nr (TSR) ---------------------- */
 
@@ -248,6 +271,97 @@ static long h_prctl(const struct pt_regs *regs)
 		return fd;
 	}
 }
+
+/* ---- /proc/cmdline spoof via TSR (replaces sys_enter+sys_exit pair) ---- *
+ *
+ * read() is a blockable high-frequency syscall.  Hooking it means
+ * dispatcher()'s SRCU read-side can be held indefinitely while any
+ * process is parked in a blocking read (sockets, pipes, ttys — there are
+ * always dozens of these in an Android system).  Plain synchronize_srcu()
+ * at module exit would never drain.
+ *
+ * Safety on unload is guaranteed by the bounded drain implemented in
+ * kasumi_syscall_redirect_exit(): call_srcu() + wait_for_completion_timeout().
+ * If the drain does not complete within 5 seconds we orderly-reboot rather
+ * than free module .text out from under in-flight callers.  This is the
+ * only correct way to hook a blockable syscall from an LKM — KSU avoids
+ * the question entirely by hooking only short, non-blocking syscalls
+ * (setresuid/execve/newfstatat/faccessat).
+ */
+#if defined(__aarch64__) || defined(__x86_64__)
+static long h_read(const struct pt_regs *regs)
+{
+	long ret;
+	int fd;
+	char __user *buf;
+	size_t count;
+	struct kasumi_cmdline_rcu *c;
+	bool is_cmdline;
+
+	/*
+	 * Daemon's own reads of /proc/cmdline must observe the truth (otherwise
+	 * the userspace controller can't tell the spoofed cmdline apart from
+	 * its own bookkeeping).  Match the policy of the legacy
+	 * kasumi_handle_sys_enter_cmdline() path.
+	 */
+	if (READ_ONCE(kasumi_daemon_pid) > 0 &&
+	    task_tgid_vnr(current) == READ_ONCE(kasumi_daemon_pid))
+		return orig_kernel_read(regs);
+
+	if (!READ_ONCE(kasumi_cmdline_spoof_active))
+		return orig_kernel_read(regs);
+
+#if defined(__aarch64__)
+	fd = (int)regs->regs[0];
+	buf = (char __user *)(uintptr_t)regs->regs[1];
+	count = (size_t)regs->regs[2];
+#else
+	fd = (int)regs->di;
+	buf = (char __user *)(uintptr_t)regs->si;
+	count = (size_t)regs->dx;
+#endif
+
+	/*
+	 * Resolve the fd's identity BEFORE the read so we don't race a
+	 * concurrent close().  fget()/fput() in process context is safe — we
+	 * are the syscall body, not a tracepoint or atomic notifier.
+	 */
+	is_cmdline = kasumi_fd_is_proc_cmdline(fd);
+
+	ret = orig_kernel_read(regs);
+
+	if (!is_cmdline || ret <= 0)
+		return ret;
+
+	/*
+	 * Overwrite the kernel-supplied buffer in-place with the configured
+	 * spoof, mirroring the post-conditions the legacy
+	 * kasumi_handle_sys_exit_cmdline() leaves behind: \n-terminated, length
+	 * clamped to userspace count, ret reset to bytes actually written.
+	 */
+	rcu_read_lock();
+	c = rcu_dereference(kasumi_spoof_cmdline_ptr);
+	if (c && c->cmdline[0]) {
+		size_t spoof_len = strnlen(c->cmdline, sizeof(c->cmdline) - 1);
+		size_t write_len = spoof_len + 1; /* +1 for trailing \n */
+		size_t n;
+
+		if (write_len > count)
+			write_len = count;
+		n = (spoof_len < write_len) ? spoof_len : write_len - 1;
+		if (write_len > 0 && copy_to_user(buf, c->cmdline, n) == 0) {
+			if (n < write_len &&
+			    copy_to_user(buf + n, "\n", 1) == 0)
+				ret = (long)(n + 1);
+			else
+				ret = (long)n;
+		}
+	}
+	rcu_read_unlock();
+
+	return ret;
+}
+#endif /* __aarch64__ || __x86_64__ */
 
 /* ---- path redirect + mount proxy (TSR) --------------------------------- */
 
@@ -352,6 +466,10 @@ int kasumi_syscall_redirect_init(void)
 		kasumi_syscall_table)[__NR_reboot];
 	orig_kernel_prctl = ((kasumi_syscall_hook_fn *)
 		kasumi_syscall_table)[__NR_prctl];
+#if defined(__aarch64__) || defined(__x86_64__)
+	orig_kernel_read = ((kasumi_syscall_hook_fn *)
+		kasumi_syscall_table)[__NR_read];
+#endif
 
 	slot = find_ni_slot();
 	if (slot < 0) {
@@ -374,22 +492,107 @@ int kasumi_syscall_redirect_init(void)
 	kasumi_register_syscall_hook(__NR_statfs,  h_statfs);
 	kasumi_register_syscall_hook(__NR_reboot,  h_reboot);
 	kasumi_register_syscall_hook(__NR_prctl,   h_prctl);
+#if defined(__aarch64__) || defined(__x86_64__)
+	kasumi_register_syscall_hook(__NR_read,    h_read);
+#endif
 
-	pr_info("Kasumi: redirect active @ slot %d, 5 hooks\n",
+	pr_info("Kasumi: redirect active @ slot %d, 6 hooks\n",
 		kasumi_syscall_dispatcher_nr);
 	return 0;
 }
 
+/*
+ * Per-call drain bookkeeping for kasumi_syscall_redirect_exit().  The
+ * struct lives as a function-static so it survives if we hit the reboot
+ * fallback path — we never want call_srcu's callback writing into a freed
+ * stack frame.
+ */
+struct kasumi_drain_state {
+	struct rcu_head head;
+	struct completion *done;
+};
+
+static void kasumi_redirect_drain_done(struct rcu_head *head)
+{
+	struct kasumi_drain_state *s =
+		container_of(head, struct kasumi_drain_state, head);
+	complete(s->done);
+}
+
 void kasumi_syscall_redirect_exit(void)
 {
+	DECLARE_COMPLETION_ONSTACK(drain_done);
+	static struct kasumi_drain_state drain;
 	int i;
+	bool drained;
+
+	/*
+	 * Caller (kasumi_bootstrap_exit) has already unregistered the
+	 * sys_enter/sys_exit tracepoint and called
+	 * tracepoint_synchronize_unregister(), so no fresh syscall will have
+	 * its syscallno rewritten to our dispatcher slot from this point on.
+	 *
+	 * Teardown ordering, mirroring KSU's ksu_syscall_hook_exit():
+	 *
+	 *   1. Restore the sys_call_table[slot] -> ni_syscall while the hook
+	 *      table is still intact, so any in-flight syscall already in the
+	 *      dispatcher (with syscallno already set to our slot) finishes
+	 *      with a valid handler lookup.  After this patch, the dispatcher
+	 *      stops being entered.
+	 *
+	 *   2. Drain in-flight handlers via SRCU with a bounded timeout.  For
+	 *      the short syscalls we currently hook (openat / openat2 / statfs
+	 *      / reboot / prctl) this completes in well under a millisecond.
+	 *      If a future blockable hook (e.g. h_read) is registered, an
+	 *      in-flight call can hang in vfs_read indefinitely; in that case
+	 *      we cannot safely free module .text — fall through to an orderly
+	 *      reboot instead.
+	 *
+	 *   3. Now we can clear the hook table — no reader can observe it.
+	 *
+	 * Doing it in the opposite order (clear hooks before patch) would let
+	 * a tracepoint-rewritten syscall enter dispatcher(), find hooks[nr] ==
+	 * NULL, and erroneously return -ENOSYS to userspace.
+	 */
+	if (kasumi_syscall_dispatcher_nr >= 0)
+		patch_entry(kasumi_syscall_dispatcher_nr, saved_ni);
+
+	/*
+	 * Async SRCU drain so we can bound the wait.  `drain` is a static so
+	 * it survives if we hit the timeout path and reboot — we don't want
+	 * the callback writing to a freed stack frame.
+	 */
+	drain.done = &drain_done;
+	call_srcu(&kasumi_redirect_srcu, &drain.head, kasumi_redirect_drain_done);
+	drained = wait_for_completion_timeout(&drain_done, 5 * HZ) != 0;
+
+	if (!drained) {
+		/*
+		 * In-flight syscall handler stuck in our .text — most likely
+		 * a future read/write/poll-class hook waiting on I/O.  Freeing
+		 * module memory now would leave that handler with a dangling
+		 * return address.  Sync filesystems and reboot.
+		 */
+		pr_emerg("Kasumi: syscall handlers did not drain in 5s; rebooting in 3s to keep module .text alive for in-flight callers\n");
+
+		if (ksm_emergency_sync) {
+			pr_emerg("Kasumi: emergency_sync() before reboot\n");
+			ksm_emergency_sync();
+		}
+
+		/*
+		 * Give emergency_sync's workqueue time to finish (its worker
+		 * is async) and userspace a moment to read the dmesg banner.
+		 */
+		msleep(3000);
+
+		kernel_restart("kasumi: unload SRCU drain timeout");
+		/* unreachable */
+		return;
+	}
 
 	for (i = 0; i < __NR_syscalls; i++)
 		WRITE_ONCE(hooks[i], NULL);
-	synchronize_srcu(&kasumi_redirect_srcu);
-
-	if (kasumi_syscall_dispatcher_nr >= 0)
-		patch_entry(kasumi_syscall_dispatcher_nr, saved_ni);
 
 	kasumi_syscall_dispatcher_nr = -1;
 	orig_kernel_openat  = NULL;
@@ -397,5 +600,6 @@ void kasumi_syscall_redirect_exit(void)
 	orig_kernel_statfs  = NULL;
 	orig_kernel_reboot  = NULL;
 	orig_kernel_prctl   = NULL;
+	orig_kernel_read    = NULL;
 	pr_info("Kasumi: redirect exited\n");
 }

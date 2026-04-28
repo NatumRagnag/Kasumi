@@ -28,6 +28,7 @@
 #include "kasumi_fop_override.h"
 #include "kasumi_fake_mountinfo.h"
 #include "kasumi_syscall_redirect.h"
+#include "kasumi_tracepoint_hooks.h"
 
 #ifndef KASUMI_VERSION
 #define KASUMI_VERSION "0.1.0-dev"
@@ -250,15 +251,35 @@ void kasumi_bootstrap_exit(void)
 
 	pr_info("Kasumi: shutting down\n");
 
-	kasumi_fake_mi_exit();
+	/*
+	 * PHASE 1: Sever every entry point that can drive a syscall hook.
+	 *
+	 *  1. tracepoint_path_exit() unregisters sys_enter/sys_exit and calls
+	 *     tracepoint_synchronize_unregister(), so no new syscall will have
+	 *     its syscallno rewritten to the dispatcher slot.
+	 *  2. syscall_redirect_exit() restores the patched ni_syscall slot and
+	 *     waits via synchronize_srcu() for in-flight dispatcher invocations
+	 *     and their handlers to drain.
+	 *
+	 * Ordering matters: relative to KSU's manager_exit, this is the
+	 * tracepoint -> syscall_table -> hooks teardown.  Any cleanup that frees
+	 * resources reachable from h_openat/h_statfs/etc. (proc fd proxies,
+	 * fake mountinfo, fop/iop shadows, vfs ftrace hooks) MUST run after
+	 * this phase, otherwise a high-frequency syscall (e.g. read) will UAF
+	 * those resources mid-teardown.
+	 */
+	kasumi_tracepoint_path_exit();
+	kasumi_syscall_redirect_exit();
+
+	/* PHASE 2: handlers can no longer be reached, free their dependencies. */
+	kasumi_proc_hooks_exit();
+	kasumi_vfs_hooks_exit(kasumi_skip_vfs_param);
 	kasumi_fop_override_exit();
 	kasumi_iop_override_exit();
 	kasumi_xattr_sid_override_exit();
 	kasumi_dop_override_exit();
 	kasumi_sop_override_exit();
-	kasumi_vfs_hooks_exit(kasumi_skip_vfs_param);
-	kasumi_proc_hooks_exit();
-	kasumi_syscall_redirect_exit();
+	kasumi_fake_mi_exit();
 	kasumi_uname_exit();
 
 	mutex_lock(&kasumi_config_mutex);
