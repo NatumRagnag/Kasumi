@@ -226,6 +226,7 @@ int kasumi_bootstrap_init(void)
 	(void)kasumi_iop_override_init();
 	(void)kasumi_fop_override_init();
 	(void)kasumi_fake_mi_init();
+	pr_alert("Kasumi: Chikyuu ga buttobu kurai tanoshinjaoo!!\n");
 	return 0;
 
 err_proc:
@@ -299,5 +300,5 @@ void kasumi_bootstrap_exit(void)
 	kasumi_percpu_base = NULL;
 	kasumi_getname_buf_base = NULL;
 	kasumi_iterate_buf_base = NULL;
-	pr_info("Kasumi: unloaded\n");
+	pr_alert("Kasumi: Goseichou thank you!!!\n");
 }
