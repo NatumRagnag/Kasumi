@@ -273,7 +273,8 @@ static long h_read(const struct pt_regs *regs)
 	    task_tgid_vnr(current) == READ_ONCE(kasumi_daemon_pid))
 		return orig_kernel_read(regs);
 
-	if (!READ_ONCE(kasumi_cmdline_spoof_active))
+	if (!READ_ONCE(kasumi_cmdline_spoof_active) ||
+	    !kasumi_should_apply_hide_rules())
 		return orig_kernel_read(regs);
 
 #if defined(__aarch64__)
@@ -395,7 +396,8 @@ static long h_statfs(const struct pt_regs *regs)
 	unsigned long s;
 	long ret;
 
-	if (!(kasumi_feature_enabled_mask & KSM_FEATURE_STATFS_SPOOF))
+	if (!(kasumi_feature_enabled_mask & KSM_FEATURE_STATFS_SPOOF) ||
+	    !kasumi_should_apply_hide_rules())
 		return orig_kernel_statfs(regs);
 	if (copy_from_user(path, (void __user *)(uintptr_t)regs->regs[0],
 			  sizeof(path) - 1))
@@ -418,8 +420,6 @@ int kasumi_syscall_redirect_init(void)
 	ret = ksm_resolve_patch_api();
 	if (ret)
 		return ret;
-
-	kasumi_root_detect();
 
 	kasumi_syscall_table = (void *)kasumi_lookup_name("sys_call_table");
 	if (!kasumi_syscall_table)

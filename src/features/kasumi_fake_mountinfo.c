@@ -9,6 +9,7 @@
  */
 #include "kasumi_fake_mountinfo.h"
 #include "kasumi_entrypoints.h"
+#include "kasumi_root_detection.h"
 
 #include <linux/fs.h>
 #include <linux/file.h>
@@ -819,7 +820,9 @@ int kasumi_fake_mi_init(void)
     ptr_revert_creds = (void *)kasumi_lookup_name("revert_creds");
     ptr_find_task_by_vpid = (void *)kasumi_lookup_name("find_task_by_vpid");
     fake_mi_init_task_ptr = (struct task_struct *)kasumi_lookup_name("init_task");
-    fake_mi_ksu_cred_pp = (struct cred **)kasumi_lookup_name("ksu_cred");
+    if ((kasumi_root_mask & KASUMI_ROOT_KSU_RDR) &&
+        kasumi_root_allows_spoofing())
+        fake_mi_ksu_cred_pp = (struct cred **)kasumi_lookup_name("ksu_cred");
 
     if (!ptr_filp_open || !ptr_filp_close || !ptr_kernel_read) {
         pr_warn("Kasumi fake_mi: symbol resolution failed (filp_open=%p filp_close=%p kernel_read=%p); feature disabled\n",

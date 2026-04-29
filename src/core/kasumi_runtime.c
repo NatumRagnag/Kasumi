@@ -182,6 +182,31 @@ KASUMI_NOCFI unsigned long kasumi_lookup_name(const char *name)
 	}
 }
 
+KASUMI_NOCFI unsigned long kasumi_lookup_name_quiet(const char *name)
+{
+	if (kasumi_kallsyms_lookup_name) {
+		unsigned long addr = kasumi_kallsyms_lookup_name(name);
+
+		if (addr && !IS_ERR_VALUE(addr))
+			return addr;
+	}
+
+	{
+		struct kprobe kp = { .symbol_name = name };
+		unsigned long addr;
+		int ret;
+
+		ret = register_kprobe(&kp);
+		if (ret < 0)
+			return 0;
+		addr = (unsigned long)kp.addr;
+		unregister_kprobe(&kp);
+		if (!addr || IS_ERR_VALUE(addr))
+			return 0;
+		return addr;
+	}
+}
+
 void kasumi_resolve_kallsyms_lookup(void)
 {
 	struct kprobe kp = { .symbol_name = "kallsyms_lookup_name" };

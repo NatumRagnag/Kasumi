@@ -93,6 +93,7 @@ extern unsigned long (*kasumi_kallsyms_lookup_name)(const char *name);
 
 bool kasumi_valid_kernel_addr(unsigned long addr);
 unsigned long kasumi_lookup_name(const char *name);
+unsigned long kasumi_lookup_name_quiet(const char *name);
 void kasumi_resolve_kallsyms_lookup(void);
 
 typedef bool (*kasumi_ksu_is_allow_uid_fn)(uid_t uid);

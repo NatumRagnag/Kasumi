@@ -13,6 +13,7 @@
  * Author: Anatdx
  */
 #include "kasumi_xattr_sid_override.h"
+#include "kasumi_root_detection.h"
 #include "kasumi_runtime.h"
 
 #include <linux/hashtable.h>
@@ -162,6 +163,8 @@ int kasumi_xattr_sid_install(struct inode *target_inode, const char *source_path
 	int ret;
 
 	if (!READ_ONCE(kasumi_xattr_sid_ready))
+		return -EOPNOTSUPP;
+	if (!kasumi_root_allows_spoofing())
 		return -EOPNOTSUPP;
 	if (!target_inode || !source_path)
 		return -EINVAL;

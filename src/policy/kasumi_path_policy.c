@@ -46,6 +46,7 @@
 #define EROFS_SUPER_MAGIC 0xe0f5e1e2
 #endif
 #include <asm/unistd.h>
+#include "kasumi_root_detection.h"
 #include "kasumi_runtime.h"
 #include "kasumi_store.h"
 #include "kasumi_path_policy.h"
@@ -94,6 +95,15 @@ static inline bool kasumi_uid_is_isolated(uid_t uid)
 	       appid <= KASUMI_KSU_LAST_ISOLATED_UID;
 }
 
+static bool kasumi_apatch_should_apply_hide(uid_t uid)
+{
+	if (kasumi_uid_is_isolated(uid))
+		return true;
+	if (!kasumi_ap_get_mod_exclude)
+		return false;
+	return kasumi_ap_get_mod_exclude(uid) != 0;
+}
+
 bool kasumi_should_apply_hide_rules(void)
 {
 	uid_t uid = __kuid_val(current_uid());
@@ -101,6 +111,11 @@ bool kasumi_should_apply_hide_rules(void)
 	/* uid 0 (root) never sees spoofed view */
 	if (unlikely(uid == 0))
 		return false;
+	if (!kasumi_root_allows_spoofing())
+		return false;
+
+	if (kasumi_root_mask & KASUMI_ROOT_APATCH)
+		return kasumi_apatch_should_apply_hide(uid);
 
 	/*
 	 * Primary: semantically-correct kernel symbol "should this uid be
@@ -153,6 +168,12 @@ KASUMI_NOCFI bool kasumi_reload_ksu_allowlist(void)
 
 	if (!mutex_trylock(&kasumi_config_mutex))
 		return false;
+
+	if (!(kasumi_root_mask & KASUMI_ROOT_KSU_RDR) ||
+	    !kasumi_root_allows_spoofing()) {
+		mutex_unlock(&kasumi_config_mutex);
+		return false;
+	}
 
 	/* Resolve symbols lazily (KSU may load after us). */
 	if (!kasumi_ksu_uid_should_umount_ptr && kasumi_kallsyms_lookup_name) {
@@ -292,6 +313,8 @@ char *kasumi_resolve_target(const char *pathname)
 	pid = task_tgid_vnr(current);
 	if (READ_ONCE(kasumi_daemon_pid) > 0 && pid == READ_ONCE(kasumi_daemon_pid))
 		return NULL;
+	if (!kasumi_should_apply_hide_rules())
+		return NULL;
 
 	path_len = strlen(pathname);
 	hash = full_name_hash(NULL, pathname, path_len);
@@ -364,6 +387,8 @@ bool kasumi_should_hide(const char *pathname)
 		return false;
 	if (unlikely(kasumi_is_privileged_process()))
 		return false;
+	if (!kasumi_should_apply_hide_rules())
+		return false;
 
 	len = strlen(pathname);
 
@@ -376,9 +401,6 @@ bool kasumi_should_hide(const char *pathname)
 		    (len == path_len && strcmp(pathname, kasumi_current_mirror_path) == 0))
 			return true;
 	}
-
-	if (!kasumi_should_apply_hide_rules())
-		return false;
 
 	/* Bloom fast-path */
 	if (atomic_read(&kasumi_hide_count) == 0)

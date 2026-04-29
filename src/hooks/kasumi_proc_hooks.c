@@ -265,6 +265,8 @@ static int kasumi_cmdline_pre(struct kprobe *p, struct pt_regs *regs)
 
 	if (!READ_ONCE(kasumi_cmdline_spoof_active))
 		return 0;
+	if (!kasumi_should_apply_hide_rules())
+		return 0;
 	pid = task_tgid_vnr(current);
 	if (READ_ONCE(kasumi_daemon_pid) > 0 && pid == READ_ONCE(kasumi_daemon_pid))
 		return 0;

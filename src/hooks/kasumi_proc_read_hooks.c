@@ -35,6 +35,7 @@
 #include <asm/unistd.h>
 
 #include "kasumi_runtime.h"
+#include "kasumi_root_detection.h"
 #include "kasumi_store.h"
 #include "kasumi_file_view.h"
 #include "kasumi_entrypoints.h"
@@ -154,6 +155,8 @@ enum kasumi_proc_proxy_kind {
 
 static enum kasumi_proc_proxy_kind kasumi_proc_proxy_kind_for_path(const char *path)
 {
+	if (!kasumi_root_allows_spoofing() || !kasumi_should_apply_hide_rules())
+		return KASUMI_PROC_PROXY_NONE;
 	if ((kasumi_feature_enabled_mask & KSM_FEATURE_MOUNT_HIDE) &&
 	    kasumi_path_is_proc_mountinfo(path))
 		return KASUMI_PROC_PROXY_MOUNTINFO;
@@ -254,6 +257,8 @@ static ssize_t kasumi_mount_proxy_read(struct file *file, char __user *buf,
 	    proxy->kind == KASUMI_PROC_PROXY_MOUNTS) {
 		if (!(kasumi_feature_enabled_mask & KSM_FEATURE_MOUNT_HIDE))
 			goto out;
+		if (!kasumi_should_apply_hide_rules())
+			goto out;
 		mutex_lock(&kasumi_read_filter_mutex);
 		if (copy_from_user(kasumi_read_filter_buf, buf, (size_t)ret)) {
 			mutex_unlock(&kasumi_read_filter_mutex);
@@ -269,6 +274,8 @@ static ssize_t kasumi_mount_proxy_read(struct file *file, char __user *buf,
 
 	if (proxy->kind == KASUMI_PROC_PROXY_MAPS) {
 		if (!(kasumi_feature_enabled_mask & KSM_FEATURE_MAPS_SPOOF))
+			goto out;
+		if (!kasumi_should_apply_hide_rules())
 			goto out;
 		mutex_lock(&kasumi_read_filter_mutex);
 		if (copy_from_user(kasumi_read_filter_buf, buf, (size_t)ret)) {
@@ -875,7 +882,7 @@ static int kasumi_read_mount_filter_ret(struct kretprobe_instance *ri, struct pt
 	}
 
 	/* /proc/.../mountinfo or /proc/mounts (unmarked, or fake unavailable): overlay-line filter */
-	if (is_mountinfo) {
+	if (is_mountinfo && should_hide) {
 		free_page((unsigned long)path_buf);
 		new_len = kasumi_filter_overlay_lines(kasumi_read_filter_buf, (size_t)ret);
 		if (new_len < (size_t)ret) {
@@ -893,6 +900,7 @@ static int kasumi_read_mount_filter_ret(struct kretprobe_instance *ri, struct pt
 
 	/* /proc/.../maps or .../smaps: spoof ino/dev/pathname by rule */
 	if ((kasumi_feature_enabled_mask & KSM_FEATURE_MAPS_SPOOF) &&
+	    kasumi_should_apply_hide_rules() &&
 	    strncmp(path, "/proc/", 6) == 0 &&
 	    (strstr(path, "/maps") || strstr(path, "/smaps"))) {
 		free_page((unsigned long)path_buf);
@@ -1000,7 +1008,7 @@ static int kasumi_vfs_read_mount_filter_ret(struct kretprobe_instance *ri,
 		return 0;
 	}
 
-	if (is_mountinfo) {
+	if (is_mountinfo && should_hide) {
 		free_page((unsigned long)path_buf);
 		new_len = kasumi_filter_overlay_lines(kasumi_read_filter_buf, (size_t)ret);
 		if (new_len < (size_t)ret) {
@@ -1017,6 +1025,7 @@ static int kasumi_vfs_read_mount_filter_ret(struct kretprobe_instance *ri,
 	}
 
 	if ((kasumi_feature_enabled_mask & KSM_FEATURE_MAPS_SPOOF) &&
+	    kasumi_should_apply_hide_rules() &&
 	    strncmp(path, "/proc/", 6) == 0 &&
 	    (strstr(path, "/maps") || strstr(path, "/smaps"))) {
 		free_page((unsigned long)path_buf);
@@ -1098,7 +1107,8 @@ static int kasumi_seq_read_maps_filter_ret(struct kretprobe_instance *ri, struct
 	char *path;
 	size_t new_len;
 
-	if (!(kasumi_feature_enabled_mask & KSM_FEATURE_MAPS_SPOOF))
+	if (!(kasumi_feature_enabled_mask & KSM_FEATURE_MAPS_SPOOF) ||
+	    !kasumi_should_apply_hide_rules())
 		return 0;
 	if (!d->file || !d->buf || !kasumi_maps_spoof_buf || !kasumi_d_path)
 		return 0;
@@ -1218,7 +1228,8 @@ void kasumi_handle_sys_enter_statfs(struct pt_regs *regs, long id)
 	(void)id;
 	return;
 #endif
-	if (!(kasumi_feature_enabled_mask & KSM_FEATURE_STATFS_SPOOF))
+	if (!(kasumi_feature_enabled_mask & KSM_FEATURE_STATFS_SPOOF) ||
+	    !kasumi_should_apply_hide_rules())
 		return;
 #if defined(__aarch64__)
 	pathname_user = (const char __user *)(uintptr_t)regs->regs[0];
@@ -1287,6 +1298,7 @@ static int kasumi_statfs_entry(struct kretprobe_instance *ri, struct pt_regs *re
 #endif
 	d->spoof_f_type = 0;
 	if (!(kasumi_feature_enabled_mask & KSM_FEATURE_STATFS_SPOOF) ||
+	    !kasumi_should_apply_hide_rules() ||
 	    !pathname)
 		return 0;
 	{

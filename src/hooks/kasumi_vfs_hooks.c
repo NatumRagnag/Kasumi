@@ -77,6 +77,9 @@ kasumi_filldir_filter(struct dir_context *ctx, const char *name,
 		container_of(ctx, struct kasumi_filldir_wrapper, wrap_ctx);
 	KASUMI_FILLDIR_RET_TYPE ret;
 
+	if (!kasumi_should_apply_hide_rules())
+		goto passthrough;
+
 	/* Inject phase: before first real entry, emit entries from merge targets
 	 * and kasumi_paths into the directory listing. */
 	if (w->dir_has_inject && !w->inject_done && w->dir_path && w->parent_dentry) {
@@ -761,6 +764,8 @@ KASUMI_NOCFI int kasumi_krp_vfs_getattr_entry(struct kretprobe_instance *ri,
 
 	if (!READ_ONCE(kasumi_enabled))
 		return 0;
+	if (!kasumi_should_apply_hide_rules())
+		return 0;
 	if (atomic_long_read(&kasumi_ioctl_tgid) == (long)task_tgid_vnr(current))
 		return 0;
 	if (kasumi_this_cpu()->in_populate_inject)
@@ -829,6 +834,8 @@ void kasumi_apply_kstat_spoof(struct inode *inode, struct kstat *stat)
 	struct kasumi_spoof_kstat_entry *e = NULL;
 
 	if (!stat)
+		return;
+	if (!kasumi_should_apply_hide_rules())
 		return;
 
 	/* Explicit per-inode spoof rule (api15) takes precedence. */
@@ -966,6 +973,8 @@ KASUMI_NOCFI int kasumi_krp_vfs_getxattr_entry(struct kretprobe_instance *ri,
 		return 0;
 
 	if (!READ_ONCE(kasumi_enabled))
+		return 0;
+	if (!kasumi_should_apply_hide_rules())
 		return 0;
 	if (atomic_long_read(&kasumi_ioctl_tgid) == (long)task_tgid_vnr(current))
 		return 0;

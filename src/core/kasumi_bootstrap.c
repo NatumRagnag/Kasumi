@@ -16,6 +16,7 @@
 
 #include "kasumi_bootstrap.h"
 #include "kasumi_runtime.h"
+#include "kasumi_root_detection.h"
 #include "kasumi_store.h"
 #include "kasumi_file_view.h"
 #include "kasumi_entrypoints.h"
@@ -136,18 +137,24 @@ static int kasumi_resolve_runtime_symbols(void)
 	if (!kasumi_filp_open || !kasumi_kernel_read)
 		pr_warn("Kasumi: filp_open/kernel_read not found, allowlist disabled\n");
 
-	{
+	if ((kasumi_root_mask & KASUMI_ROOT_KSU_RDR) &&
+	    kasumi_root_allows_spoofing()) {
 		unsigned long addr = kasumi_lookup_name("ksu_uid_should_umount");
+
 		if (addr && kasumi_valid_kernel_addr(addr))
 			kasumi_ksu_uid_should_umount_ptr = (kasumi_ksu_uid_should_umount_fn)addr;
 	}
-	{
+	if ((kasumi_root_mask & KASUMI_ROOT_KSU_RDR) &&
+	    kasumi_root_allows_spoofing()) {
 		unsigned long addr = kasumi_lookup_name("__ksu_is_allow_uid_for_current");
+
 		if (addr && kasumi_valid_kernel_addr(addr))
 			kasumi_ksu_is_allow_uid_ptr = (kasumi_ksu_is_allow_uid_fn)addr;
 	}
-	if (!kasumi_ksu_is_allow_uid_ptr) {
+	if ((kasumi_root_mask & KASUMI_ROOT_KSU_RDR) &&
+	    kasumi_root_allows_spoofing() && !kasumi_ksu_is_allow_uid_ptr) {
 		unsigned long addr = kasumi_lookup_name("__ksu_is_allow_uid");
+
 		if (addr && kasumi_valid_kernel_addr(addr))
 			kasumi_ksu_is_allow_uid_ptr = (kasumi_ksu_is_allow_uid_fn)addr;
 	}
@@ -186,6 +193,8 @@ int kasumi_bootstrap_init(void)
 		kasumi_resolve_kallsyms_lookup();
 	else
 		pr_alert("Kasumi: skipping kallsyms (using per-symbol kprobe)\n");
+
+	kasumi_root_detect();
 
 	ret = kasumi_resolve_runtime_symbols();
 	if (ret)
