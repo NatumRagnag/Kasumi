@@ -73,6 +73,7 @@ struct kasumi_kp_vmap_node {
 };
 
 int kasumi_root_mask;
+int kasumi_ksu_dispatcher_nr = -1;
 bool kasumi_root_spoof_allowed;
 const char *(*kasumi_ap_su_get_path)(void);
 int (*kasumi_ap_is_su_allow_uid)(uid_t uid);
@@ -393,24 +394,81 @@ static bool kasumi_apatch_detect(void)
 	return false;
 }
 
+static bool kasumi_path_exists(const char *path)
+{
+	struct file *f;
+
+	if (!path)
+		return false;
+	f = filp_open(path, O_RDONLY, 0);
+	if (IS_ERR(f))
+		return false;
+	filp_close(f, NULL);
+	return true;
+}
+
 static bool kasumi_ksu_detect(void)
 {
 	unsigned long a;
+	bool seen = false;
+	bool has_policy = false;
 
 	a = kasumi_lookup_name_quiet("ksu_syscall_table");
 	if (a && kasumi_valid_kernel_addr(a)) {
 		kasumi_root_mask |= KASUMI_ROOT_KSU;
+		seen = true;
 		a = kasumi_lookup_name_quiet("ksu_dispatcher_nr");
-		if (a && kasumi_valid_kernel_addr(a) &&
-		    READ_ONCE(*(int *)a) >= 0)
-			kasumi_root_mask |= KASUMI_ROOT_KSU_RDR;
-		pr_info("Kasumi: KernelSU detected%s\n",
-			(kasumi_root_mask & KASUMI_ROOT_KSU_RDR) ?
-			" (redirect)" : "");
-		return (kasumi_root_mask & KASUMI_ROOT_KSU_RDR) != 0;
+		if (a && kasumi_valid_kernel_addr(a)) {
+			int nr = -1;
+
+			if (kasumi_kernel_read_nofault(&nr, a, sizeof(nr)) &&
+			    nr >= 0) {
+				kasumi_ksu_dispatcher_nr = nr;
+				kasumi_root_mask |= KASUMI_ROOT_KSU_RDR;
+			}
+		}
 	}
 
-	return false;
+	a = kasumi_lookup_name_quiet("ksu_uid_should_umount");
+	if (a && kasumi_valid_kernel_addr(a)) {
+		kasumi_root_mask |= KASUMI_ROOT_KSU;
+		kasumi_ksu_uid_should_umount_ptr = (void *)a;
+		seen = true;
+		has_policy = true;
+	}
+
+	a = kasumi_lookup_name_quiet("ksu_get_allow_list");
+	if (a && kasumi_valid_kernel_addr(a)) {
+		kasumi_root_mask |= KASUMI_ROOT_KSU;
+		kasumi_ksu_get_allow_list_ptr = (void *)a;
+		seen = true;
+		has_policy = true;
+	}
+
+	if (seen) {
+		a = kasumi_lookup_name_quiet("__ksu_is_allow_uid_for_current");
+		if (a && kasumi_valid_kernel_addr(a))
+			kasumi_ksu_is_allow_uid_ptr = (void *)a;
+		if (!kasumi_ksu_is_allow_uid_ptr) {
+			a = kasumi_lookup_name_quiet("__ksu_is_allow_uid");
+			if (a && kasumi_valid_kernel_addr(a))
+				kasumi_ksu_is_allow_uid_ptr = (void *)a;
+		}
+	}
+
+	if (kasumi_path_exists(KASUMI_KSU_ALLOWLIST_PATH)) {
+		kasumi_root_mask |= KASUMI_ROOT_KSU;
+		seen = true;
+		has_policy = true;
+	}
+
+	if (seen)
+		pr_info("Kasumi: KernelSU detected%s%s\n",
+			(kasumi_root_mask & KASUMI_ROOT_KSU_RDR) ?
+			" (redirect)" : "",
+			has_policy ? "" : " (no policy source)");
+
+	return has_policy;
 }
 
 static bool kasumi_magisk_detect(void)
@@ -445,11 +503,12 @@ void kasumi_root_detect(void)
 	int active_roots = 0;
 
 	kasumi_root_mask = KASUMI_ROOT_NONE;
+	kasumi_ksu_dispatcher_nr = -1;
 	kasumi_root_spoof_allowed = false;
 
 	ksu_active = kasumi_ksu_detect();
 	if (!ksu_active && (kasumi_root_mask & KASUMI_ROOT_KSU))
-		pr_warn("Kasumi: KernelSU redirect inactive, ignoring KernelSU policy\n");
+		pr_warn("Kasumi: KernelSU detected without allowlist policy source\n");
 
 	if (kasumi_apatch_detect()) {
 		kasumi_root_mask |= KASUMI_ROOT_APATCH;

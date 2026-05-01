@@ -445,6 +445,13 @@ int kasumi_syscall_redirect_init(void)
 		pr_err("Kasumi: no ni_syscall slot\n");
 		return slot;
 	}
+	if ((kasumi_root_mask & KASUMI_ROOT_KSU_RDR) &&
+	    kasumi_ksu_dispatcher_nr >= 0 &&
+	    slot == kasumi_ksu_dispatcher_nr) {
+		pr_warn("Kasumi: TSR slot %d conflicts with KernelSU redirect, falling back to non-TSR hooks\n",
+			slot);
+		return -EBUSY;
+	}
 	kasumi_syscall_dispatcher_nr = slot;
 	saved_ni = ((kasumi_syscall_hook_fn *)
 		kasumi_syscall_table)[slot];

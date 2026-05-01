@@ -137,21 +137,21 @@ static int kasumi_resolve_runtime_symbols(void)
 	if (!kasumi_filp_open || !kasumi_kernel_read)
 		pr_warn("Kasumi: filp_open/kernel_read not found, allowlist disabled\n");
 
-	if ((kasumi_root_mask & KASUMI_ROOT_KSU_RDR) &&
+	if ((kasumi_root_mask & KASUMI_ROOT_KSU) &&
 	    kasumi_root_allows_spoofing()) {
 		unsigned long addr = kasumi_lookup_name("ksu_uid_should_umount");
 
 		if (addr && kasumi_valid_kernel_addr(addr))
 			kasumi_ksu_uid_should_umount_ptr = (kasumi_ksu_uid_should_umount_fn)addr;
 	}
-	if ((kasumi_root_mask & KASUMI_ROOT_KSU_RDR) &&
+	if ((kasumi_root_mask & KASUMI_ROOT_KSU) &&
 	    kasumi_root_allows_spoofing()) {
 		unsigned long addr = kasumi_lookup_name("__ksu_is_allow_uid_for_current");
 
 		if (addr && kasumi_valid_kernel_addr(addr))
 			kasumi_ksu_is_allow_uid_ptr = (kasumi_ksu_is_allow_uid_fn)addr;
 	}
-	if ((kasumi_root_mask & KASUMI_ROOT_KSU_RDR) &&
+	if ((kasumi_root_mask & KASUMI_ROOT_KSU) &&
 	    kasumi_root_allows_spoofing() && !kasumi_ksu_is_allow_uid_ptr) {
 		unsigned long addr = kasumi_lookup_name("__ksu_is_allow_uid");
 

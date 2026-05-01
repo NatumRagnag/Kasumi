@@ -820,7 +820,7 @@ int kasumi_fake_mi_init(void)
     ptr_revert_creds = (void *)kasumi_lookup_name("revert_creds");
     ptr_find_task_by_vpid = (void *)kasumi_lookup_name("find_task_by_vpid");
     fake_mi_init_task_ptr = (struct task_struct *)kasumi_lookup_name("init_task");
-    if ((kasumi_root_mask & KASUMI_ROOT_KSU_RDR) &&
+    if ((kasumi_root_mask & KASUMI_ROOT_KSU) &&
         kasumi_root_allows_spoofing())
         fake_mi_ksu_cred_pp = (struct cred **)kasumi_lookup_name("ksu_cred");
 

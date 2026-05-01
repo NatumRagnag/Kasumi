@@ -169,7 +169,7 @@ KASUMI_NOCFI bool kasumi_reload_ksu_allowlist(void)
 	if (!mutex_trylock(&kasumi_config_mutex))
 		return false;
 
-	if (!(kasumi_root_mask & KASUMI_ROOT_KSU_RDR) ||
+	if (!(kasumi_root_mask & KASUMI_ROOT_KSU) ||
 	    !kasumi_root_allows_spoofing()) {
 		mutex_unlock(&kasumi_config_mutex);
 		return false;
