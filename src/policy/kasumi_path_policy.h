@@ -18,6 +18,7 @@ bool kasumi_is_privileged_process(void);
 bool kasumi_reload_ksu_allowlist(void);
 char *kasumi_resolve_target(const char *pathname);
 bool kasumi_should_hide(const char *pathname);
+/* Caller must hold rcu_read_lock(); returned entry is only valid until unlock. */
 struct kasumi_entry *kasumi_reverse_lookup_target(const char *path_str);
 
 #endif /* _KASUMI_PATH_POLICY_H */
